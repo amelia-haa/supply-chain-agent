@@ -9,3 +9,7 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
+# ADK runtime
+agent/.adk/
+.adk/
+*.db
