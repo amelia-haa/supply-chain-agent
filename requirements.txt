@@ -1,2 +1,4 @@
 google-adk
 python-dotenv
+pandas
+feedparser
