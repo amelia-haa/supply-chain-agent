@@ -6,6 +6,7 @@ from google.adk.agents import LlmAgent
 from .tools import (
     analyze_custom_profile,
     run_full_cycle,
+    run_board_demo,
     get_company_profile,
     ingest_disruption_signals,
     score_risk,
@@ -25,6 +26,7 @@ root_agent = LlmAgent(
         "Intent handling:\n"
         "- If user sends a greeting/small talk (e.g., 'hi', 'hello', 'thanks'), reply briefly and DO NOT call tools.\n"
         "- If user asks for a cycle run or multi-company comparison, call run_full_cycle.\n"
+        "- If user asks about winning chances, judging score, or demo readiness, call run_board_demo.\n"
         "- Run the detailed multi-step tools only when user explicitly requests step-by-step outputs.\n\n"
         "Tool call safety rules:\n"
         "- Never output code-like function text such as print(...) or nested tool calls.\n"
@@ -47,6 +49,7 @@ root_agent = LlmAgent(
     tools=[
         analyze_custom_profile,
         run_full_cycle,
+        run_board_demo,
         get_company_profile,
         ingest_disruption_signals,
         score_risk,

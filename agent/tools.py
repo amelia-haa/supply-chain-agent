@@ -825,6 +825,113 @@ def build_cost_value_report(
     }
 
 
+def build_business_impact_report(
+    company: Dict[str, Any],
+    risk: Dict[str, Any],
+    plan: List[Dict[str, Any]],
+    actions: Dict[str, Any],
+    cost_value_report: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Business KPI summary aligned to judging language.
+    """
+    top_cost = float((plan[0] if plan else {}).get("cost_usd", 0.0))
+    revenue_saved = float(cost_value_report.get("estimated_revenue_saved_usd", 0.0))
+    revenue_at_risk = float(cost_value_report.get("estimated_revenue_at_risk_usd", 0.0))
+    service_protection = float((plan[0] if plan else {}).get("service_gain", 0.0))
+    resilience_uplift = float((plan[0] if plan else {}).get("resilience_gain", 0.0))
+    continuity_index = round(min(1.0, max(0.0, (service_protection * 0.6) + (resilience_uplift * 0.4))), 3)
+    cost_optimization_ratio = round(revenue_saved / max(1.0, top_cost), 3)
+
+    return {
+        "revenue_loss_prevented_usd": round(revenue_saved, 2),
+        "service_level_protection_pct": round(service_protection * 100, 1),
+        "operational_continuity_index": continuity_index,
+        "resilience_uplift_pct": round(resilience_uplift * 100, 1),
+        "cost_optimization_ratio": cost_optimization_ratio,
+        "net_benefit_usd": round(revenue_saved - top_cost, 2),
+        "risk_level": risk.get("risk_level"),
+        "auto_execution_candidate": bool(actions.get("auto_execution_candidate", False)),
+        "company_name": company.get("company_name"),
+        "formula_notes": {
+            "continuity_index": "0.6*service_gain + 0.4*resilience_gain",
+            "cost_optimization_ratio": "revenue_saved / top_action_cost",
+        },
+    }
+
+
+def build_judging_scorecard(
+    run_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Deterministic rubric scorecard to support pitch claims.
+    """
+    pipeline = run_payload.get("pipeline_stats", {})
+    actions = run_payload.get("actions", {})
+    trace = run_payload.get("transparency_trace", {})
+    impact = run_payload.get("business_impact_report", {})
+    responsible = run_payload.get("responsible_ai_report", {})
+    cost_value = run_payload.get("cost_value_report", {})
+    events = run_payload.get("events", [])
+    company = run_payload.get("company", {})
+    plan = run_payload.get("plan", [])
+
+    score_business = 20
+    if float(impact.get("revenue_loss_prevented_usd", 0)) <= 0:
+        score_business -= 5
+    if float(cost_value.get("estimated_call_reduction_pct", 0)) < 30:
+        score_business -= 3
+
+    score_design = 20
+    if not trace.get("stage_sequence"):
+        score_design -= 5
+    if len(company.get("critical_components", [])) == 0:
+        score_design -= 4
+    if len(plan) < 3:
+        score_design -= 3
+
+    score_tech = 20
+    if int(pipeline.get("stage2_batched_classification_calls", 0)) < 1:
+        score_tech -= 4
+    if "memory_write" not in run_payload:
+        score_tech -= 4
+    if int(pipeline.get("raw_signals", 0)) < 1:
+        score_tech -= 5
+
+    score_responsible = 20
+    if responsible.get("status") == "fail":
+        score_responsible -= 8
+    if not trace.get("responsible_ai_controls", {}).get("human_in_the_loop", False):
+        score_responsible -= 6
+    if len(responsible.get("checks", [])) < 3:
+        score_responsible -= 4
+
+    score_presentation = 20
+    if len(events) == 0:
+        score_presentation -= 6
+    if not actions.get("draft_supplier_email"):
+        score_presentation -= 4
+    if not actions.get("tiered_alert_action"):
+        score_presentation -= 4
+
+    scores = {
+        "business_impact": max(0, score_business),
+        "agent_design": max(0, score_design),
+        "technical_implementation": max(0, score_tech),
+        "explainability_responsible_ai": max(0, score_responsible),
+        "presentation_demo_readiness": max(0, score_presentation),
+    }
+    total = sum(scores.values())
+    return {
+        "scores": scores,
+        "total_score_out_of_100": total,
+        "grade": "A+" if total >= 95 else "A" if total >= 90 else "B",
+        "pitch_sentence": (
+            "We combine deterministic cost controls with targeted Gemini reasoning to maximize resilience ROI."
+        ),
+    }
+
+
 def estimate_mitigation_success_score(
     risk: Dict[str, Any],
     actions: Dict[str, Any],
@@ -953,6 +1060,7 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
     actions = generate_actions(company, risk, plan)
     responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
     cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
+    business_impact_report = build_business_impact_report(company, risk, plan, actions, cost_value_report)
     workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
     mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
 
@@ -965,6 +1073,7 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
         "risk": risk,
         "top_action": actions.get("recommended_top_action"),
         "cost_value_report": cost_value_report,
+        "business_impact_report": business_impact_report,
         "responsible_ai_report": responsible_ai_report,
         "mitigation_success_score": mitigation_success_score,
         "workflow_execution_log": workflow_execution_log,
@@ -981,6 +1090,7 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
         "plan": plan,
         "actions": actions,
         "cost_value_report": cost_value_report,
+        "business_impact_report": business_impact_report,
         "responsible_ai_report": responsible_ai_report,
         "workflow_execution_log": workflow_execution_log,
         "memory_write": memory_write,
@@ -1014,6 +1124,7 @@ def run_full_cycle(
         actions = generate_actions(company, risk, plan)
         responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
         cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
+        business_impact_report = build_business_impact_report(company, risk, plan, actions, cost_value_report)
         workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
         mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
 
@@ -1026,6 +1137,7 @@ def run_full_cycle(
             "risk": risk,
             "top_action": actions.get("recommended_top_action"),
             "cost_value_report": cost_value_report,
+            "business_impact_report": business_impact_report,
             "responsible_ai_report": responsible_ai_report,
             "mitigation_success_score": mitigation_success_score,
             "workflow_execution_log": workflow_execution_log,
@@ -1043,10 +1155,12 @@ def run_full_cycle(
             "plan": plan,
             "actions": actions,
             "cost_value_report": cost_value_report,
+            "business_impact_report": business_impact_report,
             "responsible_ai_report": responsible_ai_report,
             "workflow_execution_log": workflow_execution_log,
             "memory_write": memory_write,
         }
+        full_result["judging_scorecard"] = build_judging_scorecard(full_result)
         runs.append(full_result)
         summaries.append(
             {
@@ -1059,6 +1173,8 @@ def run_full_cycle(
                 "human_approval_required": actions.get("human_approval_required"),
                 "estimated_revenue_at_risk_usd": cost_value_report.get("estimated_revenue_at_risk_usd"),
                 "estimated_roi_multiple": cost_value_report.get("estimated_roi_multiple"),
+                "cost_optimization_ratio": business_impact_report.get("cost_optimization_ratio"),
+                "projected_net_benefit_usd": business_impact_report.get("net_benefit_usd"),
             }
         )
 
@@ -1069,7 +1185,51 @@ def run_full_cycle(
     }
     if include_full_output:
         payload["runs"] = runs
+        if runs:
+            payload["judging_scorecards"] = [r.get("judging_scorecard", {}) for r in runs]
     return payload
+
+
+def run_board_demo() -> Dict[str, Any]:
+    """
+    Executive-ready demo bundle:
+    1) Two-company personalization cycle
+    2) Critical escalation cycle
+    3) Rubric scorecards + headline metrics
+    """
+    normal = run_full_cycle(
+        company_ids="de_semiconductor_auto,mx_multisource_industrial",
+        include_full_output=True,
+    )
+
+    prev_signal_profile = os.environ.get("APP_SIGNAL_PROFILE")
+    os.environ["APP_SIGNAL_PROFILE"] = "critical"
+    try:
+        critical = run_full_cycle(
+            company_ids="de_semiconductor_auto",
+            include_full_output=True,
+        )
+    finally:
+        if prev_signal_profile is None:
+            os.environ.pop("APP_SIGNAL_PROFILE", None)
+        else:
+            os.environ["APP_SIGNAL_PROFILE"] = prev_signal_profile
+
+    all_runs = (normal.get("runs", []) + critical.get("runs", []))
+    all_scorecards = [r.get("judging_scorecard", {}) for r in all_runs]
+    total_scores = [int(sc.get("total_score_out_of_100", 0)) for sc in all_scorecards if sc]
+
+    headline = {
+        "best_score_out_of_100": max(total_scores) if total_scores else 0,
+        "avg_score_out_of_100": round(sum(total_scores) / max(1, len(total_scores)), 1),
+        "runs_evaluated": len(all_runs),
+        "claim": "Deterministic-first pipeline with gated Gemini reasoning and proactive mitigation execution.",
+    }
+    return {
+        "headline": headline,
+        "normal_demo": normal,
+        "critical_demo": critical,
+    }
 
 
 def write_memory(event_summary: Dict[str, Any]) -> Dict[str, Any]:

@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from agent.tools import (
+    build_business_impact_report,
+    build_judging_scorecard,
     build_responsible_ai_report,
     build_cost_value_report,
     derive_memory_feedback,
@@ -31,6 +33,8 @@ class CycleResult:
     plan: List[Dict[str, Any]]
     actions: Dict[str, Any]
     cost_value_report: Dict[str, Any]
+    business_impact_report: Dict[str, Any]
+    judging_scorecard: Dict[str, Any]
     responsible_ai_report: Dict[str, Any]
     workflow_execution_log: Dict[str, Any]
     autonomous_decision: Dict[str, Any]
@@ -48,6 +52,8 @@ class CycleResult:
             "plan": self.plan,
             "actions": self.actions,
             "cost_value_report": self.cost_value_report,
+            "business_impact_report": self.business_impact_report,
+            "judging_scorecard": self.judging_scorecard,
             "responsible_ai_report": self.responsible_ai_report,
             "workflow_execution_log": self.workflow_execution_log,
             "autonomous_decision": self.autonomous_decision,
@@ -76,6 +82,7 @@ class AutonomousSupplyChainOrchestrator:
         actions = generate_actions(company, risk, plan)
         responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
         cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
+        business_impact_report = build_business_impact_report(company, risk, plan, actions, cost_value_report)
         workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
         mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
         autonomous_decision = self._decide_autonomous_execution(risk, actions)
@@ -100,6 +107,7 @@ class AutonomousSupplyChainOrchestrator:
             "risk": risk,
             "top_action": actions.get("recommended_top_action"),
             "cost_value_report": cost_value_report,
+            "business_impact_report": business_impact_report,
             "responsible_ai_report": responsible_ai_report,
             "mitigation_success_score": mitigation_success_score,
             "workflow_execution_log": workflow_execution_log,
@@ -107,9 +115,27 @@ class AutonomousSupplyChainOrchestrator:
             "autonomous_execution": autonomous_decision,
         }
         memory_write = write_memory(memory_event)
+        provisional_result = {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "company": company,
+            "events": events,
+            "memory_feedback": memory_feedback,
+            "pipeline_stats": pipeline_stats,
+            "risk": risk,
+            "plan": plan,
+            "actions": actions,
+            "cost_value_report": cost_value_report,
+            "business_impact_report": business_impact_report,
+            "responsible_ai_report": responsible_ai_report,
+            "workflow_execution_log": workflow_execution_log,
+            "autonomous_decision": autonomous_decision,
+            "transparency_trace": transparency_trace,
+            "memory_write": memory_write,
+        }
+        judging_scorecard = build_judging_scorecard(provisional_result)
 
         return CycleResult(
-            timestamp_utc=datetime.now(timezone.utc).isoformat(),
+            timestamp_utc=provisional_result["timestamp_utc"],
             company=company,
             events=events,
             memory_feedback=memory_feedback,
@@ -118,6 +144,8 @@ class AutonomousSupplyChainOrchestrator:
             plan=plan,
             actions=actions,
             cost_value_report=cost_value_report,
+            business_impact_report=business_impact_report,
+            judging_scorecard=judging_scorecard,
             responsible_ai_report=responsible_ai_report,
             workflow_execution_log=workflow_execution_log,
             autonomous_decision=autonomous_decision,

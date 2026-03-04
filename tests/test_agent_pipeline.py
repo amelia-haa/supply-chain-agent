@@ -5,12 +5,15 @@ import unittest
 
 from agent.tools import (
     analyze_custom_profile,
+    build_business_impact_report,
+    build_judging_scorecard,
     build_responsible_ai_report,
     derive_memory_feedback,
     generate_actions,
     get_company_profile,
     log_mock_workflow_execution,
     run_cost_optimized_pipeline,
+    run_board_demo,
     score_risk,
     simulate_tradeoffs,
 )
@@ -94,6 +97,39 @@ class AgentPipelineTests(unittest.TestCase):
         out = log_mock_workflow_execution(company, risk, actions)
         self.assertIn("integration_results", out)
         self.assertGreaterEqual(len(out["integration_results"]), 1)
+
+    def test_business_impact_and_scorecard(self) -> None:
+        company = get_company_profile("de_semiconductor_auto")
+        pipeline = run_cost_optimized_pipeline(company)
+        risk = score_risk(company, pipeline["events_for_risk"])
+        plan = simulate_tradeoffs(company, risk)
+        actions = generate_actions(company, risk, plan)
+        cvr = {
+            "estimated_revenue_saved_usd": 100000.0,
+            "estimated_revenue_at_risk_usd": 300000.0,
+            "estimated_call_reduction_pct": 50.0,
+        }
+        impact = build_business_impact_report(company, risk, plan, actions, cvr)
+        payload = {
+            "pipeline_stats": pipeline["pipeline_stats"],
+            "actions": actions,
+            "transparency_trace": {"stage_sequence": ["perception"]},
+            "business_impact_report": impact,
+            "responsible_ai_report": {"status": "pass", "checks": [1, 2, 3]},
+            "cost_value_report": cvr,
+            "events": pipeline["events_for_risk"],
+            "company": company,
+            "plan": plan,
+            "memory_write": {"saved": True},
+        }
+        scorecard = build_judging_scorecard(payload)
+        self.assertIn("total_score_out_of_100", scorecard)
+        self.assertGreaterEqual(scorecard["total_score_out_of_100"], 0)
+
+    def test_board_demo_runs(self) -> None:
+        out = run_board_demo()
+        self.assertIn("headline", out)
+        self.assertIn("best_score_out_of_100", out["headline"])
 
 
 if __name__ == "__main__":

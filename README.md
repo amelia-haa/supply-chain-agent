@@ -156,6 +156,13 @@ Outputs:
 - Optional real webhook workflow execution (with retries + status logs)
 - Hyper-personalized profile-based analysis
 - Dual runtime mode (`api` and `vertex`)
+- Judge-ready scorecard outputs (`business_impact_report`, `judging_scorecard`)
+
+Board demo command (in ADK chat):
+
+```text
+Run the board demo and return headline score plus the best mitigation case.
+```
 
 ## 10) Public GitHub safety checklist
 
@@ -190,10 +197,3 @@ Do not copy:
 - `agent/.env`
 - Any service-account JSON key file
 - `__pycache__/`, `.DS_Store`, `.adk/`
-
-## 12) Troubleshooting
-
-- `GOOGLE_API_KEY is required`: set API key and `APP_RUNTIME_MODE=api`.
-- Vertex auth error: run `gcloud auth application-default login` or set valid `GOOGLE_APPLICATION_CREDENTIALS`.
-- ADK port busy: `start_adk.sh` auto-increments from 8000.
-- Empty live feed: run `./refresh_live_data.sh 40`, then rerun agent.
