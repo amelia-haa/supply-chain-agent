@@ -787,6 +787,88 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
     }
 
 
+def run_full_cycle(
+    company_ids: str = "de_semiconductor_auto",
+    include_full_output: bool = False,
+) -> Dict[str, Any]:
+    """
+    Execute one autonomous cycle for one or more company IDs.
+    Use comma-separated company IDs for multi-company comparison.
+    Returns a concise summary by default; set include_full_output=True to include full payloads.
+    """
+    ids = [s.strip() for s in str(company_ids).split(",") if s.strip()]
+    if not ids:
+        ids = ["de_semiconductor_auto"]
+
+    runs: List[Dict[str, Any]] = []
+    summaries: List[Dict[str, Any]] = []
+
+    for cid in ids:
+        company = get_company_profile(cid)
+        memory_feedback = derive_memory_feedback(company.get("company_name", "unknown"))
+        optimized_pipeline = run_cost_optimized_pipeline(company)
+        events = optimized_pipeline["events_for_risk"]
+        pipeline_stats = optimized_pipeline["pipeline_stats"]
+        risk = score_risk(company, events, memory_feedback=memory_feedback)
+        plan = simulate_tradeoffs(company, risk)
+        actions = generate_actions(company, risk, plan)
+        cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
+        workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
+        mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
+
+        memory_event = {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "company_id": company.get("company_id"),
+            "company_name": company.get("company_name"),
+            "top_event": events[0] if events else None,
+            "pipeline_stats": pipeline_stats,
+            "risk": risk,
+            "top_action": actions.get("recommended_top_action"),
+            "cost_value_report": cost_value_report,
+            "mitigation_success_score": mitigation_success_score,
+            "workflow_execution_log": workflow_execution_log,
+            "approval_required": actions.get("human_approval_required", False),
+        }
+        memory_write = write_memory(memory_event)
+
+        full_result = {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "company": company,
+            "events": events,
+            "memory_feedback": memory_feedback,
+            "pipeline_stats": pipeline_stats,
+            "risk": risk,
+            "plan": plan,
+            "actions": actions,
+            "cost_value_report": cost_value_report,
+            "workflow_execution_log": workflow_execution_log,
+            "memory_write": memory_write,
+        }
+        runs.append(full_result)
+        summaries.append(
+            {
+                "company_id": company.get("company_id"),
+                "company_name": company.get("company_name"),
+                "risk_level": risk.get("risk_level"),
+                "risk_score": risk.get("risk_score"),
+                "top_3_actions": [p.get("action") for p in plan[:3]],
+                "tiered_alert_action": actions.get("tiered_alert_action"),
+                "human_approval_required": actions.get("human_approval_required"),
+                "estimated_revenue_at_risk_usd": cost_value_report.get("estimated_revenue_at_risk_usd"),
+                "estimated_roi_multiple": cost_value_report.get("estimated_roi_multiple"),
+            }
+        )
+
+    payload: Dict[str, Any] = {
+        "run_count": len(runs),
+        "companies_processed": [s["company_id"] for s in summaries],
+        "summary": summaries,
+    }
+    if include_full_output:
+        payload["runs"] = runs
+    return payload
+
+
 def write_memory(event_summary: Dict[str, Any]) -> Dict[str, Any]:
     mem = _load_memory()
     mem["events"].append(event_summary)
