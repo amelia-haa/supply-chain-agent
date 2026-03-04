@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from agent.tools import (
+    build_responsible_ai_report,
     build_cost_value_report,
     derive_memory_feedback,
     estimate_mitigation_success_score,
@@ -30,6 +31,7 @@ class CycleResult:
     plan: List[Dict[str, Any]]
     actions: Dict[str, Any]
     cost_value_report: Dict[str, Any]
+    responsible_ai_report: Dict[str, Any]
     workflow_execution_log: Dict[str, Any]
     autonomous_decision: Dict[str, Any]
     transparency_trace: Dict[str, Any]
@@ -46,6 +48,7 @@ class CycleResult:
             "plan": self.plan,
             "actions": self.actions,
             "cost_value_report": self.cost_value_report,
+            "responsible_ai_report": self.responsible_ai_report,
             "workflow_execution_log": self.workflow_execution_log,
             "autonomous_decision": self.autonomous_decision,
             "transparency_trace": self.transparency_trace,
@@ -71,6 +74,7 @@ class AutonomousSupplyChainOrchestrator:
         risk = score_risk(company, events, memory_feedback=memory_feedback)
         plan = simulate_tradeoffs(company, risk)
         actions = generate_actions(company, risk, plan)
+        responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
         cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
         workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
         mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
@@ -84,6 +88,7 @@ class AutonomousSupplyChainOrchestrator:
             actions,
             autonomous_decision,
             cost_value_report,
+            responsible_ai_report,
         )
 
         memory_event = {
@@ -95,6 +100,7 @@ class AutonomousSupplyChainOrchestrator:
             "risk": risk,
             "top_action": actions.get("recommended_top_action"),
             "cost_value_report": cost_value_report,
+            "responsible_ai_report": responsible_ai_report,
             "mitigation_success_score": mitigation_success_score,
             "workflow_execution_log": workflow_execution_log,
             "approval_required": actions.get("human_approval_required", False),
@@ -112,6 +118,7 @@ class AutonomousSupplyChainOrchestrator:
             plan=plan,
             actions=actions,
             cost_value_report=cost_value_report,
+            responsible_ai_report=responsible_ai_report,
             workflow_execution_log=workflow_execution_log,
             autonomous_decision=autonomous_decision,
             transparency_trace=transparency_trace,
@@ -146,6 +153,7 @@ class AutonomousSupplyChainOrchestrator:
         actions: Dict[str, Any],
         autonomous_decision: Dict[str, Any],
         cost_value_report: Dict[str, Any],
+        responsible_ai_report: Dict[str, Any],
     ) -> Dict[str, Any]:
         return {
             "stage_sequence": ["perception", "risk_intelligence", "planning", "action", "memory"],
@@ -167,6 +175,9 @@ class AutonomousSupplyChainOrchestrator:
             "responsible_ai_controls": {
                 "human_in_the_loop": True,
                 "override_threshold": "risk_score >= 0.78 triggers autonomous workflow with approval gate",
-                "bias_check_status": "placeholder_demo_ready",
+                "bias_check_status": responsible_ai_report.get("bias_check_status", "unknown"),
+                "validation_status": responsible_ai_report.get("status", "unknown"),
+                "checks": responsible_ai_report.get("checks", []),
+                "findings": responsible_ai_report.get("findings", []),
             },
         }

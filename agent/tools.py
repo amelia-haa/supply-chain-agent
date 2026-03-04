@@ -2,6 +2,10 @@ import json
 import os
 import hashlib
 import re
+import tempfile
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
@@ -32,8 +36,11 @@ def _load_memory() -> Dict[str, Any]:
 def _load_json(path: str, default: Dict[str, Any]) -> Dict[str, Any]:
     if not os.path.exists(path):
         return default
-    with open(path, "r", encoding="utf-8") as f:
-        raw = f.read().strip()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+    except OSError:
+        return default
     if not raw:
         return default
     try:
@@ -43,8 +50,22 @@ def _load_json(path: str, default: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _save_json(path: str, payload: Dict[str, Any]) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    # Atomic write to reduce risk of partial/corrupted state files during abrupt stops.
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_state_", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def _save_memory(mem: Dict[str, Any]) -> None:
@@ -259,6 +280,41 @@ def _append_workflow_log(record: Dict[str, Any]) -> None:
     store = _load_json(WORKFLOW_LOG_PATH, {"records": []})
     store.setdefault("records", []).append(record)
     _save_json(WORKFLOW_LOG_PATH, store)
+
+
+def _post_json_with_retry(
+    url: str,
+    payload: Dict[str, Any],
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    timeout_seconds: float = 8.0,
+    max_retries: int = 2,
+) -> Dict[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    req_headers = {"Content-Type": "application/json"}
+    if headers:
+        req_headers.update(headers)
+
+    last_err = ""
+    for attempt in range(max_retries + 1):
+        try:
+            req = urllib.request.Request(url, data=body, headers=req_headers, method="POST")
+            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                return {
+                    "ok": 200 <= int(resp.status) < 300,
+                    "status": int(resp.status),
+                    "body_preview": raw[:400],
+                    "attempts": attempt + 1,
+                }
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
+            last_err = str(exc)
+            if attempt < max_retries:
+                time.sleep(0.35 * (2 ** attempt))
+                continue
+            break
+
+    return {"ok": False, "status": None, "error": last_err, "attempts": max_retries + 1}
 
 
 def _estimate_tokens(events: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -601,6 +657,94 @@ Estimated cost: ${top['cost_usd']:,}
     }
 
 
+def build_responsible_ai_report(
+    company: Dict[str, Any],
+    risk: Dict[str, Any],
+    plan: List[Dict[str, Any]],
+    events: List[Dict[str, Any]],
+    actions: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Decision transparency package:
+    - bias/supply-base concentration checks
+    - constraint validation
+    - explicit human-override policy output
+    """
+    findings: List[Dict[str, Any]] = []
+    checks: List[Dict[str, Any]] = []
+    guardrails = list(actions.get("guardrail_flags", []))
+
+    semicon_share = (
+        company.get("supplier_concentration", {})
+        .get("semiconductors", {})
+        .get("top_supplier_share", 0.0)
+    )
+    if semicon_share >= 0.8:
+        findings.append(
+            {
+                "type": "concentration_bias_risk",
+                "severity": "high",
+                "message": f"Single-source concentration is high ({semicon_share:.0%}).",
+            }
+        )
+        checks.append({"check": "single_supplier_concentration", "status": "warning"})
+    else:
+        checks.append({"check": "single_supplier_concentration", "status": "pass"})
+
+    impacted_regions = {str(e.get("region", "")).strip().lower() for e in events if e.get("region")}
+    company_region = str(company.get("region", "")).strip().lower()
+    if company_region and impacted_regions and company_region not in impacted_regions:
+        checks.append({"check": "regional_decision_alignment", "status": "pass"})
+    else:
+        checks.append({"check": "regional_decision_alignment", "status": "review"})
+
+    annual_revenue = float(company.get("annual_revenue_usd", 100_000_000))
+    top_cost = float((plan[0] if plan else {}).get("cost_usd", 0.0))
+    budget_cap = annual_revenue * 0.05
+    if top_cost > budget_cap:
+        findings.append(
+            {
+                "type": "budget_constraint",
+                "severity": "high",
+                "message": f"Top action cost (${top_cost:,.0f}) exceeds 5% revenue cap (${budget_cap:,.0f}).",
+            }
+        )
+        checks.append({"check": "budget_guardrail", "status": "fail"})
+    else:
+        checks.append({"check": "budget_guardrail", "status": "pass"})
+
+    if float(risk.get("risk_score", 0.0)) >= 0.78 and not actions.get("human_approval_required", False):
+        findings.append(
+            {
+                "type": "override_policy_conflict",
+                "severity": "critical",
+                "message": "High risk crossed threshold but human approval flag is false.",
+            }
+        )
+        checks.append({"check": "human_override_threshold", "status": "fail"})
+    else:
+        checks.append({"check": "human_override_threshold", "status": "pass"})
+
+    status = "pass"
+    if any(f["severity"] == "critical" for f in findings):
+        status = "fail"
+    elif findings:
+        status = "warning"
+
+    return {
+        "status": status,
+        "checks": checks,
+        "findings": findings,
+        "guardrails": guardrails,
+        "override_policy": {
+            "human_in_the_loop": True,
+            "threshold": "risk_score >= 0.78",
+            "approval_required": bool(actions.get("human_approval_required", False)),
+        },
+        "bias_check_status": "validated" if status in {"pass", "warning"} else "failed",
+    }
+
+
 def run_cost_optimized_pipeline(company: Dict[str, Any]) -> Dict[str, Any]:
     raw_events = _load_signal_templates()
     now = datetime.now(timezone.utc).isoformat()
@@ -710,7 +854,10 @@ def log_mock_workflow_execution(
     risk: Dict[str, Any],
     actions: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Emit deterministic mock integration logs to prove workflow execution paths."""
+    """
+    Workflow execution logging with optional real integration delivery.
+    If webhook URLs are configured, send real notifications with retries.
+    """
     record = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "company_id": company.get("company_id"),
@@ -723,8 +870,58 @@ def log_mock_workflow_execution(
             {"provider": "slack", "status": "success", "code": 200},
         ],
     }
+
+    integration_results: List[Dict[str, Any]] = []
+    webhook_url = os.getenv("WORKFLOW_WEBHOOK_URL", "").strip()
+    slack_url = os.getenv("SLACK_WEBHOOK_URL", "").strip()
+    delivery_payload = {
+        "event_type": "workflow.execution",
+        "company_id": company.get("company_id"),
+        "company_name": company.get("company_name"),
+        "risk_level": risk.get("risk_level"),
+        "actions": actions.get("triggered_workflows", []),
+        "timestamp_utc": record["timestamp_utc"],
+    }
+    if webhook_url:
+        integration_results.append(
+            {
+                "provider": "webhook",
+                **_post_json_with_retry(webhook_url, delivery_payload, headers={"X-Event-Type": "workflow.execution"}),
+            }
+        )
+    if slack_url:
+        integration_results.append(
+            {
+                "provider": "slack",
+                **_post_json_with_retry(
+                    slack_url,
+                    {
+                        "text": (
+                            f"Supply-chain workflow update for {company.get('company_name')} "
+                            f"(risk={risk.get('risk_level')})"
+                        )
+                    },
+                ),
+            }
+        )
+    if not integration_results:
+        integration_results = [
+            {"provider": "webhook", "ok": None, "status": "skipped", "reason": "WORKFLOW_WEBHOOK_URL not set"},
+            {"provider": "slack", "ok": None, "status": "skipped", "reason": "SLACK_WEBHOOK_URL not set"},
+        ]
+
+    record["integration_results"] = integration_results
     _append_workflow_log(record)
-    return {"logged": True, "providers": 2, "path": WORKFLOW_LOG_PATH}
+    successful = sum(1 for r in integration_results if r.get("ok") is True)
+    failed = sum(1 for r in integration_results if r.get("ok") is False)
+    return {
+        "logged": True,
+        "providers": len(integration_results),
+        "delivered": successful,
+        "failed": failed,
+        "path": WORKFLOW_LOG_PATH,
+        "integration_results": integration_results,
+    }
 
 
 def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
@@ -754,6 +951,7 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
     risk = score_risk(company, events, memory_feedback=memory_feedback)
     plan = simulate_tradeoffs(company, risk)
     actions = generate_actions(company, risk, plan)
+    responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
     cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
     workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
     mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
@@ -767,6 +965,7 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
         "risk": risk,
         "top_action": actions.get("recommended_top_action"),
         "cost_value_report": cost_value_report,
+        "responsible_ai_report": responsible_ai_report,
         "mitigation_success_score": mitigation_success_score,
         "workflow_execution_log": workflow_execution_log,
         "approval_required": actions.get("human_approval_required", False),
@@ -782,6 +981,7 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
         "plan": plan,
         "actions": actions,
         "cost_value_report": cost_value_report,
+        "responsible_ai_report": responsible_ai_report,
         "workflow_execution_log": workflow_execution_log,
         "memory_write": memory_write,
     }
@@ -812,6 +1012,7 @@ def run_full_cycle(
         risk = score_risk(company, events, memory_feedback=memory_feedback)
         plan = simulate_tradeoffs(company, risk)
         actions = generate_actions(company, risk, plan)
+        responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
         cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
         workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
         mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
@@ -825,6 +1026,7 @@ def run_full_cycle(
             "risk": risk,
             "top_action": actions.get("recommended_top_action"),
             "cost_value_report": cost_value_report,
+            "responsible_ai_report": responsible_ai_report,
             "mitigation_success_score": mitigation_success_score,
             "workflow_execution_log": workflow_execution_log,
             "approval_required": actions.get("human_approval_required", False),
@@ -841,6 +1043,7 @@ def run_full_cycle(
             "plan": plan,
             "actions": actions,
             "cost_value_report": cost_value_report,
+            "responsible_ai_report": responsible_ai_report,
             "workflow_execution_log": workflow_execution_log,
             "memory_write": memory_write,
         }

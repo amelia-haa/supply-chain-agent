@@ -110,6 +110,17 @@ or:
 python3 live_ingest.py --max-items 40
 ```
 
+## 6.1) Real workflow execution integrations (optional)
+
+To move from draft-only actions to real outbound workflow execution, set:
+
+```bash
+WORKFLOW_WEBHOOK_URL=<your webhook endpoint>
+SLACK_WEBHOOK_URL=<your incoming slack webhook>
+```
+
+When set, each cycle attempts real webhook delivery with retries and logs delivery status.
+
 ## 7) Critical escalation demo mode
 
 ```bash
@@ -142,6 +153,7 @@ Outputs:
 - Multi-step reasoning pipeline with cost controls
 - Mitigation planning and action generation
 - Memory write-back and reflection loop
+- Optional real webhook workflow execution (with retries + status logs)
 - Hyper-personalized profile-based analysis
 - Dual runtime mode (`api` and `vertex`)
 
