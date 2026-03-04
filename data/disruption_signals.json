@@ -1,0 +1,56 @@
+{
+  "signals": [
+    {
+      "id": "evt-shipping-redsea",
+      "type": "shipping_disruption",
+      "region": "Red Sea",
+      "severity": 0.82,
+      "confidence": 0.75,
+      "summary": "Carriers diverting routes causing 10-20 day delays.",
+      "affected": [
+        "ocean_freight",
+        "semiconductors"
+      ],
+      "category": "logistics"
+    },
+    {
+      "id": "evt-geopolitical-export",
+      "type": "geopolitical_change",
+      "region": "East Asia",
+      "severity": 0.66,
+      "confidence": 0.71,
+      "summary": "New export control checks may delay semiconductor customs clearance.",
+      "affected": [
+        "semiconductors",
+        "customs"
+      ],
+      "category": "procurement"
+    },
+    {
+      "id": "evt-climate-port",
+      "type": "climate_event",
+      "region": "North Europe",
+      "severity": 0.49,
+      "confidence": 0.64,
+      "summary": "Severe storms create intermittent port closure risk this week.",
+      "affected": [
+        "ocean_freight",
+        "finished_goods"
+      ],
+      "category": "logistics"
+    },
+    {
+      "id": "evt-supplier-health",
+      "type": "supplier_financial_alert",
+      "region": "East Asia",
+      "severity": 0.58,
+      "confidence": 0.62,
+      "summary": "Tier-2 electronics supplier files debt restructuring notice.",
+      "affected": [
+        "semiconductors",
+        "controllers"
+      ],
+      "category": "procurement"
+    }
+  ]
+}

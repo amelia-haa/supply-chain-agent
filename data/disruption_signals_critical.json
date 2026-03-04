@@ -1,0 +1,45 @@
+{
+  "signals": [
+    {
+      "id": "evt-critical-chip-eastasia",
+      "type": "semiconductor_shortage",
+      "region": "East Asia",
+      "severity": 0.93,
+      "confidence": 0.86,
+      "summary": "Critical fab outage and export-control tightening drive immediate semiconductor allocation cuts.",
+      "affected": [
+        "semiconductors",
+        "controllers",
+        "customs"
+      ],
+      "category": "procurement"
+    },
+    {
+      "id": "evt-critical-redsea",
+      "type": "shipping_disruption",
+      "region": "Red Sea",
+      "severity": 0.9,
+      "confidence": 0.81,
+      "summary": "Multiple carriers suspend transit; estimated 18-25 day reroute delays for key lanes.",
+      "affected": [
+        "ocean_freight",
+        "semiconductors",
+        "finished_goods"
+      ],
+      "category": "logistics"
+    },
+    {
+      "id": "evt-critical-climate-port",
+      "type": "climate_event",
+      "region": "North Europe",
+      "severity": 0.79,
+      "confidence": 0.73,
+      "summary": "Severe storm system causing rolling closures at key transshipment ports.",
+      "affected": [
+        "ocean_freight",
+        "wire_harness"
+      ],
+      "category": "logistics"
+    }
+  ]
+}

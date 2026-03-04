@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "source_mode": "live_rss",
+    "fetched_at_utc": "2026-03-04T03:11:35.161191+00:00",
+    "raw_items": 0,
+    "signals": 0,
+    "allow_insecure_ssl_fetch": false,
+    "include_noaa": true,
+    "source_counts": {
+      "rss_items": 0,
+      "noaa_alerts": 0
+    },
+    "errors": [
+      "https://feeds.reuters.com/reuters/worldNews: <urlopen error [Errno 8] nodename nor servname provided, or not known>",
+      "https://feeds.bbci.co.uk/news/world/rss.xml: <urlopen error [Errno 8] nodename nor servname provided, or not known>",
+      "https://rss.nytimes.com/services/xml/rss/nyt/World.xml: <urlopen error [Errno 8] nodename nor servname provided, or not known>",
+      "https://www.aljazeera.com/xml/rss/all.xml: <urlopen error [Errno 8] nodename nor servname provided, or not known>",
+      "https://api.weather.gov/alerts/active: <urlopen error [Errno 8] nodename nor servname provided, or not known>"
+    ]
+  },
+  "signals": []
+}

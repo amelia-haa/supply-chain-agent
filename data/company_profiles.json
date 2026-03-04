@@ -1,0 +1,74 @@
+{
+  "profiles": {
+    "de_semiconductor_auto": {
+      "company_id": "de_semiconductor_auto",
+      "company_name": "MidMarket Auto Parts Co",
+      "region": "Germany",
+      "industry": "automotive_parts",
+      "risk_appetite": "medium",
+      "critical_components": [
+        "semiconductors",
+        "wire_harness"
+      ],
+      "supplier_concentration": {
+        "semiconductors": {
+          "top_supplier_share": 0.72,
+          "region": "East Asia"
+        },
+        "wire_harness": {
+          "top_supplier_share": 0.55,
+          "region": "Eastern Europe"
+        }
+      },
+      "inventory_policy": {
+        "semiconductors_days_buffer": 10,
+        "wire_harness_days_buffer": 15
+      },
+      "contract_structures": {
+        "semiconductors": "fixed_volume_quarterly",
+        "wire_harness": "rolling_monthly"
+      },
+      "sla": {
+        "on_time_delivery_target": 0.95,
+        "penalty_per_day_delay_usd": 25000
+      },
+      "lead_time_sensitivity": "high"
+    },
+    "mx_multisource_industrial": {
+      "company_id": "mx_multisource_industrial",
+      "company_name": "Norte Industrial Components",
+      "region": "Mexico",
+      "industry": "industrial_components",
+      "risk_appetite": "high",
+      "critical_components": [
+        "bearings",
+        "controllers"
+      ],
+      "supplier_concentration": {
+        "bearings": {
+          "top_supplier_share": 0.38,
+          "region": "North America"
+        },
+        "controllers": {
+          "top_supplier_share": 0.41,
+          "region": "North America"
+        }
+      },
+      "inventory_policy": {
+        "semiconductors_days_buffer": 0,
+        "wire_harness_days_buffer": 0,
+        "bearings_days_buffer": 18,
+        "controllers_days_buffer": 21
+      },
+      "contract_structures": {
+        "bearings": "flex_capacity_monthly",
+        "controllers": "dual_source_quarterly"
+      },
+      "sla": {
+        "on_time_delivery_target": 0.92,
+        "penalty_per_day_delay_usd": 14000
+      },
+      "lead_time_sensitivity": "medium"
+    }
+  }
+}
