@@ -5,8 +5,12 @@ from google.adk.agents import LlmAgent
 
 from .tools import (
     analyze_custom_profile,
+    onboard_company_profile,
     run_full_cycle,
     run_board_demo,
+    run_evaluation_harness,
+    simulate_what_if_scenarios,
+    generate_roi_benchmark_report,
     get_company_profile,
     ingest_disruption_signals,
     score_risk,
@@ -27,6 +31,10 @@ root_agent = LlmAgent(
         "- If user sends a greeting/small talk (e.g., 'hi', 'hello', 'thanks'), reply briefly and DO NOT call tools.\n"
         "- If user asks for a cycle run or multi-company comparison, call run_full_cycle.\n"
         "- If user asks about winning chances, judging score, or demo readiness, call run_board_demo.\n"
+        "- If user asks for what-if simulation, call simulate_what_if_scenarios.\n"
+        "- If user asks to onboard a new company profile, call onboard_company_profile.\n"
+        "- If user asks for ROI benchmark comparison, call generate_roi_benchmark_report.\n"
+        "- If user asks for systematic model evaluation, call run_evaluation_harness.\n"
         "- Run the detailed multi-step tools only when user explicitly requests step-by-step outputs.\n\n"
         "Tool call safety rules:\n"
         "- Never output code-like function text such as print(...) or nested tool calls.\n"
@@ -48,8 +56,12 @@ root_agent = LlmAgent(
     ),
     tools=[
         analyze_custom_profile,
+        onboard_company_profile,
         run_full_cycle,
         run_board_demo,
+        run_evaluation_harness,
+        simulate_what_if_scenarios,
+        generate_roi_benchmark_report,
         get_company_profile,
         ingest_disruption_signals,
         score_risk,

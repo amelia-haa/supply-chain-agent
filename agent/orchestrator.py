@@ -7,6 +7,11 @@ from typing import Any, Dict, List, Optional
 from agent.tools import (
     build_business_impact_report,
     build_judging_scorecard,
+    build_uncertainty_bands,
+    build_executive_summary,
+    detect_signal_drift,
+    generate_playbook_autopilot,
+    optimize_supplier_portfolio,
     build_responsible_ai_report,
     build_cost_value_report,
     derive_memory_feedback,
@@ -35,6 +40,11 @@ class CycleResult:
     cost_value_report: Dict[str, Any]
     business_impact_report: Dict[str, Any]
     judging_scorecard: Dict[str, Any]
+    uncertainty_bands: Dict[str, Any]
+    portfolio_optimization: Dict[str, Any]
+    playbook_autopilot: Dict[str, Any]
+    drift_report: Dict[str, Any]
+    executive_summary: Dict[str, Any]
     responsible_ai_report: Dict[str, Any]
     workflow_execution_log: Dict[str, Any]
     autonomous_decision: Dict[str, Any]
@@ -54,6 +64,11 @@ class CycleResult:
             "cost_value_report": self.cost_value_report,
             "business_impact_report": self.business_impact_report,
             "judging_scorecard": self.judging_scorecard,
+            "uncertainty_bands": self.uncertainty_bands,
+            "portfolio_optimization": self.portfolio_optimization,
+            "playbook_autopilot": self.playbook_autopilot,
+            "drift_report": self.drift_report,
+            "executive_summary": self.executive_summary,
             "responsible_ai_report": self.responsible_ai_report,
             "workflow_execution_log": self.workflow_execution_log,
             "autonomous_decision": self.autonomous_decision,
@@ -83,6 +98,10 @@ class AutonomousSupplyChainOrchestrator:
         responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
         cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
         business_impact_report = build_business_impact_report(company, risk, plan, actions, cost_value_report)
+        uncertainty_bands = build_uncertainty_bands(risk, cost_value_report)
+        portfolio_optimization = optimize_supplier_portfolio(company)
+        playbook_autopilot = generate_playbook_autopilot(events, risk, company)
+        drift_report = detect_signal_drift(events)
         workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
         mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
         autonomous_decision = self._decide_autonomous_execution(risk, actions)
@@ -127,12 +146,17 @@ class AutonomousSupplyChainOrchestrator:
             "cost_value_report": cost_value_report,
             "business_impact_report": business_impact_report,
             "responsible_ai_report": responsible_ai_report,
+            "uncertainty_bands": uncertainty_bands,
+            "portfolio_optimization": portfolio_optimization,
+            "playbook_autopilot": playbook_autopilot,
+            "drift_report": drift_report,
             "workflow_execution_log": workflow_execution_log,
             "autonomous_decision": autonomous_decision,
             "transparency_trace": transparency_trace,
             "memory_write": memory_write,
         }
         judging_scorecard = build_judging_scorecard(provisional_result)
+        executive_summary = build_executive_summary(provisional_result)
 
         return CycleResult(
             timestamp_utc=provisional_result["timestamp_utc"],
@@ -146,6 +170,11 @@ class AutonomousSupplyChainOrchestrator:
             cost_value_report=cost_value_report,
             business_impact_report=business_impact_report,
             judging_scorecard=judging_scorecard,
+            uncertainty_bands=uncertainty_bands,
+            portfolio_optimization=portfolio_optimization,
+            playbook_autopilot=playbook_autopilot,
+            drift_report=drift_report,
+            executive_summary=executive_summary,
             responsible_ai_report=responsible_ai_report,
             workflow_execution_log=workflow_execution_log,
             autonomous_decision=autonomous_decision,

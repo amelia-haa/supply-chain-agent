@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 MEMORY_PATH = os.path.join(os.path.dirname(__file__), "memory.json")
 PROFILES_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "company_profiles.json")
@@ -17,6 +17,7 @@ CRITICAL_DISRUPTIONS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file_
 PIPELINE_CACHE_PATH = os.path.join(os.path.dirname(__file__), "pipeline_cache.json")
 EVENT_STATE_PATH = os.path.join(os.path.dirname(__file__), "event_state.json")
 WORKFLOW_LOG_PATH = os.path.join(os.path.dirname(__file__), "workflow_execution_log.json")
+DRIFT_STATE_PATH = os.path.join(os.path.dirname(__file__), "drift_state.json")
 
 
 def _load_memory() -> Dict[str, Any]:
@@ -932,6 +933,292 @@ def build_judging_scorecard(
     }
 
 
+def build_uncertainty_bands(
+    risk: Dict[str, Any],
+    cost_value_report: Dict[str, Any],
+) -> Dict[str, Any]:
+    score = float(risk.get("risk_score", 0.0))
+    base_rar = float(cost_value_report.get("estimated_revenue_at_risk_usd", 0.0))
+    band = 0.12 if score < 0.5 else 0.18 if score < 0.8 else 0.28
+    risk_best = max(0.0, round(score * (1 - band), 4))
+    risk_worst = min(1.0, round(score * (1 + band), 4))
+    rar_best = round(base_rar * (1 - band), 2)
+    rar_worst = round(base_rar * (1 + band), 2)
+    return {
+        "risk_score_band": {"best": risk_best, "base": round(score, 4), "worst": risk_worst},
+        "revenue_at_risk_band_usd": {"best": rar_best, "base": round(base_rar, 2), "worst": rar_worst},
+        "method": "deterministic_sensitivity_band",
+    }
+
+
+def optimize_supplier_portfolio(
+    company: Dict[str, Any],
+    max_single_supplier_pct: float = 0.60,
+) -> Dict[str, Any]:
+    critical = [str(c) for c in company.get("critical_components", [])]
+    concentration = company.get("supplier_concentration", {})
+    allocations: List[Dict[str, Any]] = []
+    for comp in critical:
+        info = concentration.get(comp, {})
+        top_share = float(info.get("top_supplier_share", 0.5))
+        primary = min(max_single_supplier_pct, max(0.35, top_share - 0.15))
+        secondary = round(max(0.20, 1.0 - primary), 3)
+        primary = round(1.0 - secondary, 3)
+        allocations.append(
+            {
+                "component": comp,
+                "recommended_primary_pct": primary,
+                "recommended_secondary_pct": secondary,
+                "regional_cap_applied": True,
+                "reason": "Reduce concentration while preserving feasible lead-time coverage.",
+            }
+        )
+    return {
+        "strategy": "dual_source_optimization",
+        "max_single_supplier_pct": max_single_supplier_pct,
+        "allocations": allocations,
+    }
+
+
+def generate_playbook_autopilot(
+    events: List[Dict[str, Any]],
+    risk: Dict[str, Any],
+    company: Dict[str, Any],
+) -> Dict[str, Any]:
+    top_event = events[0] if events else {}
+    event_type = str(top_event.get("type", "generic"))
+    risk_level = str(risk.get("risk_level", "low"))
+    playbook = {
+        "shipping_disruption": "reroute_and_buffer",
+        "semiconductor_shortage": "resourcing_and_contract_hedge",
+        "climate_event": "regional_fallback_and_safety_stock",
+        "geopolitical_change": "customs_and_alternative_supplier_path",
+    }.get(event_type, "generic_resilience_playbook")
+    return {
+        "selected_playbook": playbook,
+        "event_type": event_type,
+        "risk_level": risk_level,
+        "autopilot_mode": "auto_with_human_gate" if risk_level in {"high", "critical"} else "assistive",
+        "first_72h_actions": [
+            "Trigger supplier outreach workflow",
+            "Recalculate reorder parameters",
+            "Review expedited lane options",
+        ],
+        "human_approval_required": risk_level in {"high", "critical"},
+        "company_id": company.get("company_id"),
+    }
+
+
+def detect_signal_drift(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    prev = _load_json(DRIFT_STATE_PATH, {"type_counts": {}, "region_counts": {}, "last_updated_utc": None})
+    prev_types = prev.get("type_counts", {})
+    prev_regions = prev.get("region_counts", {})
+    type_counts: Dict[str, int] = {}
+    region_counts: Dict[str, int] = {}
+    for e in events:
+        t = str(e.get("type", "unknown"))
+        r = str(e.get("region", "unknown"))
+        type_counts[t] = type_counts.get(t, 0) + 1
+        region_counts[r] = region_counts.get(r, 0) + 1
+
+    def _delta(curr: Dict[str, int], old: Dict[str, int]) -> List[Dict[str, Any]]:
+        keys = set(curr.keys()) | set(old.keys())
+        out = []
+        for k in sorted(keys):
+            c = curr.get(k, 0)
+            o = old.get(k, 0)
+            if c != o:
+                out.append({"key": k, "previous": o, "current": c, "delta": c - o})
+        return out
+
+    type_delta = _delta(type_counts, prev_types)
+    region_delta = _delta(region_counts, prev_regions)
+    status = "shift_detected" if type_delta or region_delta else "stable"
+
+    _save_json(
+        DRIFT_STATE_PATH,
+        {
+            "type_counts": type_counts,
+            "region_counts": region_counts,
+            "last_updated_utc": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return {"status": status, "type_changes": type_delta[:8], "region_changes": region_delta[:8]}
+
+
+def build_executive_summary(run_payload: Dict[str, Any]) -> Dict[str, Any]:
+    company = run_payload.get("company", {})
+    risk = run_payload.get("risk", {})
+    actions = run_payload.get("actions", {})
+    impact = run_payload.get("business_impact_report", {})
+    top_action = (run_payload.get("plan") or [{}])[0]
+    return {
+        "company": company.get("company_name"),
+        "risk_level": risk.get("risk_level"),
+        "risk_score": risk.get("risk_score"),
+        "revenue_at_risk_usd": run_payload.get("cost_value_report", {}).get("estimated_revenue_at_risk_usd"),
+        "revenue_saved_usd": impact.get("revenue_loss_prevented_usd"),
+        "top_decision": top_action.get("action"),
+        "next_72h_priority": actions.get("tiered_alert_action"),
+    }
+
+
+def _run_cycle_internal(company_id: str) -> Dict[str, Any]:
+    company = get_company_profile(company_id)
+    memory_feedback = derive_memory_feedback(company.get("company_name", "unknown"))
+    optimized_pipeline = run_cost_optimized_pipeline(company)
+    events = optimized_pipeline["events_for_risk"]
+    pipeline_stats = optimized_pipeline["pipeline_stats"]
+    risk = score_risk(company, events, memory_feedback=memory_feedback)
+    plan = simulate_tradeoffs(company, risk)
+    actions = generate_actions(company, risk, plan)
+    responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
+    cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
+    business_impact_report = build_business_impact_report(company, risk, plan, actions, cost_value_report)
+    uncertainty_bands = build_uncertainty_bands(risk, cost_value_report)
+    portfolio_optimization = optimize_supplier_portfolio(company)
+    playbook_autopilot = generate_playbook_autopilot(events, risk, company)
+    drift_report = detect_signal_drift(events)
+    workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
+    mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
+    memory_event = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "company_id": company.get("company_id"),
+        "company_name": company.get("company_name"),
+        "top_event": events[0] if events else None,
+        "pipeline_stats": pipeline_stats,
+        "risk": risk,
+        "top_action": actions.get("recommended_top_action"),
+        "cost_value_report": cost_value_report,
+        "business_impact_report": business_impact_report,
+        "responsible_ai_report": responsible_ai_report,
+        "mitigation_success_score": mitigation_success_score,
+        "workflow_execution_log": workflow_execution_log,
+        "approval_required": actions.get("human_approval_required", False),
+    }
+    memory_write = write_memory(memory_event)
+    full_result = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "company": company,
+        "events": events,
+        "memory_feedback": memory_feedback,
+        "pipeline_stats": pipeline_stats,
+        "risk": risk,
+        "plan": plan,
+        "actions": actions,
+        "cost_value_report": cost_value_report,
+        "business_impact_report": business_impact_report,
+        "responsible_ai_report": responsible_ai_report,
+        "uncertainty_bands": uncertainty_bands,
+        "portfolio_optimization": portfolio_optimization,
+        "playbook_autopilot": playbook_autopilot,
+        "drift_report": drift_report,
+        "workflow_execution_log": workflow_execution_log,
+        "memory_write": memory_write,
+    }
+    full_result["judging_scorecard"] = build_judging_scorecard(full_result)
+    full_result["executive_summary"] = build_executive_summary(full_result)
+    return full_result
+
+
+def simulate_what_if_scenarios(
+    company_id: str = "de_semiconductor_auto",
+    fuel_multiplier: float = 1.0,
+    lead_time_shock_days: int = 0,
+    demand_shock_pct: float = 0.0,
+    risk_appetite_override: str = "",
+) -> Dict[str, Any]:
+    company = get_company_profile(company_id)
+    if risk_appetite_override:
+        company = dict(company)
+        company["risk_appetite"] = risk_appetite_override
+    base = _run_cycle_internal(company_id)
+    base_risk = float(base["risk"]["risk_score"])
+    adjusted = min(1.0, base_risk + max(0.0, fuel_multiplier - 1.0) * 0.08 + (lead_time_shock_days * 0.01) + (demand_shock_pct / 100.0) * 0.12)
+    return {
+        "company_id": company_id,
+        "scenario_inputs": {
+            "fuel_multiplier": fuel_multiplier,
+            "lead_time_shock_days": lead_time_shock_days,
+            "demand_shock_pct": demand_shock_pct,
+            "risk_appetite_override": risk_appetite_override or company.get("risk_appetite"),
+        },
+        "base_risk_score": round(base_risk, 4),
+        "scenario_risk_score": round(adjusted, 4),
+        "delta_risk_score": round(adjusted - base_risk, 4),
+        "recommended_switch": "Activate escalation playbook" if adjusted >= 0.78 else "Keep assistive mode with inventory buffer",
+        "top_3_actions": [p.get("action") for p in base.get("plan", [])[:3]],
+    }
+
+
+def onboard_company_profile(
+    company_name: str,
+    region: str,
+    industry: str,
+    critical_components_csv: str,
+    risk_appetite: str = "medium",
+) -> Dict[str, Any]:
+    components = [c.strip().lower() for c in str(critical_components_csv).split(",") if c.strip()]
+    if not components:
+        components = ["semiconductors"]
+    company_id = re.sub(r"[^a-z0-9]+", "_", company_name.lower()).strip("_")[:40] or "custom_company"
+    profile = {
+        "company_id": company_id,
+        "company_name": company_name,
+        "region": region,
+        "industry": industry,
+        "risk_appetite": risk_appetite,
+        "critical_components": components,
+        "supplier_concentration": {c: {"top_supplier_share": 0.6, "region": "global"} for c in components},
+        "inventory_policy": {f"{c}_days_buffer": 14 for c in components},
+        "contract_structures": {c: "rolling_monthly" for c in components},
+        "sla": {"on_time_delivery_target": 0.95, "penalty_per_day_delay_usd": 20000},
+        "lead_time_sensitivity": "high" if "semiconductors" in components else "medium",
+    }
+    return {"profile": profile, "next_step": "Use analyze_custom_profile(profile) to run full tailored analysis."}
+
+
+def run_evaluation_harness() -> Dict[str, Any]:
+    scenarios: List[Tuple[str, str]] = [
+        ("de_semiconductor_auto", "default"),
+        ("de_semiconductor_auto", "critical"),
+        ("mx_multisource_industrial", "default"),
+    ]
+    results = []
+    prev = os.environ.get("APP_SIGNAL_PROFILE")
+    try:
+        for cid, profile in scenarios:
+            os.environ["APP_SIGNAL_PROFILE"] = profile
+            run = _run_cycle_internal(cid)
+            score = int(run.get("judging_scorecard", {}).get("total_score_out_of_100", 0))
+            results.append({"company_id": cid, "signal_profile": profile, "score": score, "risk_level": run.get("risk", {}).get("risk_level")})
+    finally:
+        if prev is None:
+            os.environ.pop("APP_SIGNAL_PROFILE", None)
+        else:
+            os.environ["APP_SIGNAL_PROFILE"] = prev
+    avg = round(sum(r["score"] for r in results) / max(1, len(results)), 1)
+    return {"scenario_count": len(results), "avg_score_out_of_100": avg, "results": results}
+
+
+def generate_roi_benchmark_report(company_ids: str = "de_semiconductor_auto,mx_multisource_industrial") -> Dict[str, Any]:
+    ids = [s.strip() for s in company_ids.split(",") if s.strip()]
+    rows = []
+    for cid in ids:
+        run = _run_cycle_internal(cid)
+        cvr = run.get("cost_value_report", {})
+        rows.append(
+            {
+                "company_id": cid,
+                "annual_ai_cost_usd": cvr.get("estimated_annual_ai_cost_usd"),
+                "revenue_saved_usd": cvr.get("estimated_revenue_saved_usd"),
+                "roi_multiple": cvr.get("estimated_roi_multiple"),
+                "call_reduction_pct": cvr.get("estimated_call_reduction_pct"),
+            }
+        )
+    return {"companies": rows, "generated_utc": datetime.now(timezone.utc).isoformat()}
+
+
 def estimate_mitigation_success_score(
     risk: Dict[str, Any],
     actions: Dict[str, Any],
@@ -1051,6 +1338,7 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
     company.setdefault("critical_components", ["semiconductors"])
     company.setdefault("risk_appetite", "medium")
 
+    # Reuse existing pipeline for custom profile by applying scoring/planning actions directly.
     memory_feedback = derive_memory_feedback(company.get("company_name", "Custom Company"))
     optimized_pipeline = run_cost_optimized_pipeline(company)
     events = optimized_pipeline["events_for_risk"]
@@ -1061,27 +1349,32 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
     responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
     cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
     business_impact_report = build_business_impact_report(company, risk, plan, actions, cost_value_report)
+    uncertainty_bands = build_uncertainty_bands(risk, cost_value_report)
+    portfolio_optimization = optimize_supplier_portfolio(company)
+    playbook_autopilot = generate_playbook_autopilot(events, risk, company)
+    drift_report = detect_signal_drift(events)
     workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
     mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
 
-    memory_event = {
+    memory_write = write_memory(
+        {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "company_id": company.get("company_id"),
+            "company_name": company.get("company_name"),
+            "top_event": events[0] if events else None,
+            "pipeline_stats": pipeline_stats,
+            "risk": risk,
+            "top_action": actions.get("recommended_top_action"),
+            "cost_value_report": cost_value_report,
+            "business_impact_report": business_impact_report,
+            "responsible_ai_report": responsible_ai_report,
+            "mitigation_success_score": mitigation_success_score,
+            "workflow_execution_log": workflow_execution_log,
+            "approval_required": actions.get("human_approval_required", False),
+        }
+    )
+    out = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "company_id": company.get("company_id"),
-        "company_name": company.get("company_name"),
-        "top_event": events[0] if events else None,
-        "pipeline_stats": pipeline_stats,
-        "risk": risk,
-        "top_action": actions.get("recommended_top_action"),
-        "cost_value_report": cost_value_report,
-        "business_impact_report": business_impact_report,
-        "responsible_ai_report": responsible_ai_report,
-        "mitigation_success_score": mitigation_success_score,
-        "workflow_execution_log": workflow_execution_log,
-        "approval_required": actions.get("human_approval_required", False),
-    }
-    memory_write = write_memory(memory_event)
-
-    return {
         "company": company,
         "events": events,
         "memory_feedback": memory_feedback,
@@ -1092,9 +1385,16 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
         "cost_value_report": cost_value_report,
         "business_impact_report": business_impact_report,
         "responsible_ai_report": responsible_ai_report,
+        "uncertainty_bands": uncertainty_bands,
+        "portfolio_optimization": portfolio_optimization,
+        "playbook_autopilot": playbook_autopilot,
+        "drift_report": drift_report,
         "workflow_execution_log": workflow_execution_log,
         "memory_write": memory_write,
     }
+    out["judging_scorecard"] = build_judging_scorecard(out)
+    out["executive_summary"] = build_executive_summary(out)
+    return out
 
 
 def run_full_cycle(
@@ -1114,67 +1414,21 @@ def run_full_cycle(
     summaries: List[Dict[str, Any]] = []
 
     for cid in ids:
-        company = get_company_profile(cid)
-        memory_feedback = derive_memory_feedback(company.get("company_name", "unknown"))
-        optimized_pipeline = run_cost_optimized_pipeline(company)
-        events = optimized_pipeline["events_for_risk"]
-        pipeline_stats = optimized_pipeline["pipeline_stats"]
-        risk = score_risk(company, events, memory_feedback=memory_feedback)
-        plan = simulate_tradeoffs(company, risk)
-        actions = generate_actions(company, risk, plan)
-        responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
-        cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
-        business_impact_report = build_business_impact_report(company, risk, plan, actions, cost_value_report)
-        workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
-        mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
-
-        memory_event = {
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            "company_id": company.get("company_id"),
-            "company_name": company.get("company_name"),
-            "top_event": events[0] if events else None,
-            "pipeline_stats": pipeline_stats,
-            "risk": risk,
-            "top_action": actions.get("recommended_top_action"),
-            "cost_value_report": cost_value_report,
-            "business_impact_report": business_impact_report,
-            "responsible_ai_report": responsible_ai_report,
-            "mitigation_success_score": mitigation_success_score,
-            "workflow_execution_log": workflow_execution_log,
-            "approval_required": actions.get("human_approval_required", False),
-        }
-        memory_write = write_memory(memory_event)
-
-        full_result = {
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            "company": company,
-            "events": events,
-            "memory_feedback": memory_feedback,
-            "pipeline_stats": pipeline_stats,
-            "risk": risk,
-            "plan": plan,
-            "actions": actions,
-            "cost_value_report": cost_value_report,
-            "business_impact_report": business_impact_report,
-            "responsible_ai_report": responsible_ai_report,
-            "workflow_execution_log": workflow_execution_log,
-            "memory_write": memory_write,
-        }
-        full_result["judging_scorecard"] = build_judging_scorecard(full_result)
+        full_result = _run_cycle_internal(cid)
         runs.append(full_result)
         summaries.append(
             {
-                "company_id": company.get("company_id"),
-                "company_name": company.get("company_name"),
-                "risk_level": risk.get("risk_level"),
-                "risk_score": risk.get("risk_score"),
-                "top_3_actions": [p.get("action") for p in plan[:3]],
-                "tiered_alert_action": actions.get("tiered_alert_action"),
-                "human_approval_required": actions.get("human_approval_required"),
-                "estimated_revenue_at_risk_usd": cost_value_report.get("estimated_revenue_at_risk_usd"),
-                "estimated_roi_multiple": cost_value_report.get("estimated_roi_multiple"),
-                "cost_optimization_ratio": business_impact_report.get("cost_optimization_ratio"),
-                "projected_net_benefit_usd": business_impact_report.get("net_benefit_usd"),
+                "company_id": full_result["company"].get("company_id"),
+                "company_name": full_result["company"].get("company_name"),
+                "risk_level": full_result["risk"].get("risk_level"),
+                "risk_score": full_result["risk"].get("risk_score"),
+                "top_3_actions": [p.get("action") for p in full_result.get("plan", [])[:3]],
+                "tiered_alert_action": full_result["actions"].get("tiered_alert_action"),
+                "human_approval_required": full_result["actions"].get("human_approval_required"),
+                "estimated_revenue_at_risk_usd": full_result["cost_value_report"].get("estimated_revenue_at_risk_usd"),
+                "estimated_roi_multiple": full_result["cost_value_report"].get("estimated_roi_multiple"),
+                "cost_optimization_ratio": full_result["business_impact_report"].get("cost_optimization_ratio"),
+                "projected_net_benefit_usd": full_result["business_impact_report"].get("net_benefit_usd"),
             }
         )
 

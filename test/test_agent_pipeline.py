@@ -8,12 +8,16 @@ from agent.tools import (
     build_business_impact_report,
     build_judging_scorecard,
     build_responsible_ai_report,
+    generate_roi_benchmark_report,
     derive_memory_feedback,
     generate_actions,
     get_company_profile,
     log_mock_workflow_execution,
+    onboard_company_profile,
     run_cost_optimized_pipeline,
     run_board_demo,
+    run_evaluation_harness,
+    simulate_what_if_scenarios,
     score_risk,
     simulate_tradeoffs,
 )
@@ -130,6 +134,32 @@ class AgentPipelineTests(unittest.TestCase):
         out = run_board_demo()
         self.assertIn("headline", out)
         self.assertIn("best_score_out_of_100", out["headline"])
+
+    def test_what_if_and_onboarding_and_benchmark(self) -> None:
+        sim = simulate_what_if_scenarios(
+            company_id="de_semiconductor_auto",
+            fuel_multiplier=1.15,
+            lead_time_shock_days=4,
+            demand_shock_pct=8.0,
+        )
+        self.assertIn("scenario_risk_score", sim)
+
+        onboard = onboard_company_profile(
+            company_name="Acme Motion",
+            region="Canada",
+            industry="industrial_components",
+            critical_components_csv="controllers,bearings",
+            risk_appetite="low",
+        )
+        self.assertIn("profile", onboard)
+        self.assertEqual(onboard["profile"]["company_name"], "Acme Motion")
+
+        eval_out = run_evaluation_harness()
+        self.assertIn("avg_score_out_of_100", eval_out)
+
+        bench = generate_roi_benchmark_report("de_semiconductor_auto")
+        self.assertIn("companies", bench)
+        self.assertGreaterEqual(len(bench["companies"]), 1)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__/
+*.pyc
+.DS_Store
+.adk/
+adk_apps/.adk/
+agent/.adk/
+*.log
+.env
+agent/.env
+service-account*.json
+*.key.json

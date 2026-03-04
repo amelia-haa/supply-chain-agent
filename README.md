@@ -164,6 +164,20 @@ Board demo command (in ADK chat):
 Run the board demo and return headline score plus the best mitigation case.
 ```
 
+Additional advanced demo prompts:
+
+```text
+Run a what-if simulation for de_semiconductor_auto with fuel_multiplier=1.2, lead_time_shock_days=5, demand_shock_pct=10.
+```
+
+```text
+Onboard a new company profile: name=Acme Motion, region=Canada, industry=industrial_components, components=controllers,bearings, risk_appetite=low.
+```
+
+```text
+Generate ROI benchmark report for de_semiconductor_auto,mx_multisource_industrial.
+```
+
 ## 10) Public GitHub safety checklist
 
 Before pushing:
@@ -197,3 +211,54 @@ Do not copy:
 - `agent/.env`
 - Any service-account JSON key file
 - `__pycache__/`, `.DS_Store`, `.adk/`
+
+## 12) Troubleshooting
+
+- `GOOGLE_API_KEY is required`: set API key and `APP_RUNTIME_MODE=api`.
+- Vertex auth error: run `gcloud auth application-default login` or set valid `GOOGLE_APPLICATION_CREDENTIALS`.
+- ADK port busy: `start_adk.sh` auto-increments from 8000.
+- Empty live feed: run `./refresh_live_data.sh 40`, then rerun agent.
+
+## 13) Event-Driven Cloud Run Deployment
+
+This project includes a Cloud Run HTTP service that only runs full cycles when new disruption signals appear.
+
+Files:
+
+- `cloud_run_app.py`
+- `Dockerfile`
+- `.dockerignore`
+- `deploy_cloud_run.sh`
+
+Deploy:
+
+```bash
+gcloud auth login
+gcloud config set project supply-chain-agent-489104
+./deploy_cloud_run.sh supply-chain-agent-489104 us-central1 supply-chain-agent-runner
+```
+
+Test:
+
+```bash
+curl <SERVICE_URL>/healthz
+curl -X POST <SERVICE_URL>/run-cycle -H "Content-Type: application/json" -d '{"company_ids":["de_semiconductor_auto","mx_multisource_industrial"],"max_items":40}'
+```
+
+Expected behavior:
+
+- If no new signals: returns `status=skipped_no_new_signals` (no expensive run)
+- If new signals: returns `status=processed` with cycle output
+
+Create Cloud Scheduler (every 15 min):
+
+```bash
+gcloud scheduler jobs create http supply-chain-agent-schedule \
+  --location=us-central1 \
+  --schedule="*/15 * * * *" \
+  --uri="<SERVICE_URL>/run-cycle" \
+  --http-method=POST \
+  --headers="Content-Type=application/json" \
+  --message-body='{"company_ids":["de_semiconductor_auto","mx_multisource_industrial"],"max_items":40}' \
+  --oidc-service-account-email="<SCHEDULER_SA_EMAIL>"
+```
