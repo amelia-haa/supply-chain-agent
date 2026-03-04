@@ -10,19 +10,19 @@
 
 # Load local env files if present.
 # Priority:
-# 1) repo .env
-# 2) agent/.env (legacy override)
+# 1) agent/.env (legacy defaults)
+# 2) repo .env (user override; highest priority file)
 MODE_OVERRIDE="${APP_RUNTIME_MODE:-}"
-if [ -f "./.env" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    source "./.env"
-    set +a
-fi
 if [ -f "./agent/.env" ]; then
     set -a
     # shellcheck disable=SC1091
     source "./agent/.env"
+    set +a
+fi
+if [ -f "./.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "./.env"
     set +a
 fi
 if [ -n "${MODE_OVERRIDE}" ]; then
