@@ -1,112 +1,187 @@
-
 # Autonomous Supply Chain Resilience Agent
 
-An AI-powered Supply Chain Resilience Agent built using **Google ADK + Gemini**.
+AI co-pilot prototype for mid-market manufacturing stability, built with Google ADK + Gemini.
 
-This agent acts as an intelligent operations co-pilot for mid-market manufacturers by detecting disruption signals, assessing operational risk, and recommending mitigation strategies.
+## 1) Prerequisites
 
----
+- Python 3.10+ (tested on Python 3.13)
+- `pip`
+- Optional for Vertex mode: `gcloud` CLI
+- Internet access only if you want live feed ingestion
 
-## Problem
-
-Modern supply chains face increasing disruption risks:
-
-- Supplier shutdowns
-- Port congestion
-- Climate-related delays
-- Geopolitical instability
-
-Mid-market manufacturers often lack structured tools to proactively assess risk and simulate mitigation strategies.
-
----
-
-## Solution
-
-This project demonstrates an autonomous agent that:
-
-- Monitors disruption signals (mock data)
-- Classifies disruption type and severity
-- Estimates disruption probability
-- Calculates revenue-at-risk
-- Simulates mitigation trade-offs
-- Drafts supplier outreach emails
-- Logs disruption cases into memory
-
-The system follows a structured pipeline:
-
-Perception → Risk Assessment → Planning → Action → Memory
-
----
-
-## 🏗 Project Structure
-
-```
-agent/
-  agent.py        # ADK agent definition
-  tools.py        # Risk engine, simulations, email drafting
-
-data/
-  company_profile.json
-  disruptions.json
-  memory.json
-```
-
----
-
-##  How To Run
-
-### 1. Clone the repository
+## 2) Clone and install
 
 ```bash
-git clone https://github.com/amelia-haa/supply-chain-agent.git
-cd supply-chain-agent
-```
-
-### 2. Create a virtual environment
-
-```bash
+git clone <your-repo-url>
+cd <your-repo-folder>
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-### 3. Install dependencies
-
-```bash
 pip install -r requirements.txt
 ```
 
-### 4. Create a `.env` file
+## 3) Configure environment
 
-In the project root, create a file named `.env` and add:
-
-```
-GOOGLE_GENAI_USE_VERTEXAI=0
-GOOGLE_API_KEY=YOUR_GOOGLE_AI_STUDIO_API_KEY
-```
-
-Generate your API key here:
-https://aistudio.google.com/apikey
-
-### 5. Run the agent
+Create local env from template:
 
 ```bash
-python -m google.adk web
+cp .env.example .env
 ```
 
-Open your browser at:
+Edit `.env` and choose one runtime mode:
 
-http://127.0.0.1:8000
+### Option A: API mode (recommended for demo speed)
 
----
+```bash
+APP_RUNTIME_MODE=api
+GOOGLE_API_KEY=<your_google_ai_studio_api_key>
+```
 
-## 🔒 Security
+### Option B: Vertex mode (Google Cloud)
 
-API keys are NOT included in this repository.
-Each user must provide their own API key locally in a `.env` file.
+```bash
+APP_RUNTIME_MODE=vertex
+GOOGLE_CLOUD_PROJECT=<your_project_id>
+GOOGLE_CLOUD_LOCATION=us-central1
+```
 
----
+Auth for Vertex mode (pick one):
 
-## 🏆 Built For
+- `GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json`
+- or ADC:
+  - `gcloud auth application-default login`
 
-Autonomous Supply Chain Resilience Hackathon  
-Google ADK Workshop 2026
+Load env in terminal:
+
+```bash
+set -a; source .env; set +a
+```
+
+## 4) Run the agent (CLI)
+
+Single cycle:
+
+```bash
+python3 main.py --cycles 1
+```
+
+Multiple companies:
+
+```bash
+python3 main.py --cycles 1 --companies de_semiconductor_auto,mx_multisource_industrial
+```
+
+Continuous loop:
+
+```bash
+python3 main.py --cycles 24 --interval-seconds 60
+```
+
+## 5) Run in Google ADK Web UI
+
+```bash
+./start_adk.sh
+```
+
+Open:
+
+- `http://127.0.0.1:8000`
+
+The app is packaged as one ADK app:
+
+- `adk_apps/autonomous_supply_chain_agent`
+
+## 6) Data modes
+
+Set `APP_SIGNAL_SOURCE`:
+
+- `mock`: `data/disruption_signals.json` (default)
+- `live`: `data/live_disruption_signals.json` (falls back to mock if live is empty)
+- `hybrid`: merge mock + live
+
+Refresh live feed manually:
+
+```bash
+./refresh_live_data.sh 40
+```
+
+or:
+
+```bash
+python3 live_ingest.py --max-items 40
+```
+
+## 7) Critical escalation demo mode
+
+```bash
+export APP_SIGNAL_PROFILE=critical
+python3 main.py --cycles 1 --companies de_semiconductor_auto
+```
+
+## 8) Tests and dashboard
+
+Run tests:
+
+```bash
+python3 -m unittest discover -s tests -p "test_*.py" -v
+```
+
+Generate dashboard artifacts:
+
+```bash
+python3 generate_dashboard.py
+```
+
+Outputs:
+
+- `deliverables/dashboard_summary.json`
+- `deliverables/dashboard_summary.html`
+
+## 9) What this prototype demonstrates
+
+- Real-time-ready disruption monitoring flow (mock/live/hybrid input)
+- Multi-step reasoning pipeline with cost controls
+- Mitigation planning and action generation
+- Memory write-back and reflection loop
+- Hyper-personalized profile-based analysis
+- Dual runtime mode (`api` and `vertex`)
+
+## 10) Public GitHub safety checklist
+
+Before pushing:
+
+1. Ensure no secrets are committed (`.env`, `agent/.env`, service-account JSON).
+2. Rotate any key that was ever pasted in chat, screenshots, or terminal history.
+3. Keep only `.env.example` in repo.
+4. Verify `.gitignore` includes `.env`, `*.env`, `.adk/`, and key files.
+
+Secret scan:
+
+```bash
+rg -n "AIza|GOOGLE_API_KEY|BEGIN PRIVATE KEY|-----BEGIN" .
+```
+
+## 11) Copy-safe handoff checklist
+
+If you copy this project into another repo, include:
+
+- `adk_apps/`
+- `agent/`
+- `data/`
+- `deliverables/`
+- `tests/`
+- `main.py`, `start_adk.sh`, `refresh_live_data.sh`, `live_ingest.py`, `generate_dashboard.py`
+- `requirements.txt`, `.env.example`, `.gitignore`, `README.md`
+
+Do not copy:
+
+- `.env`
+- `agent/.env`
+- Any service-account JSON key file
+- `__pycache__/`, `.DS_Store`, `.adk/`
+
+## 12) Troubleshooting
+
+- `GOOGLE_API_KEY is required`: set API key and `APP_RUNTIME_MODE=api`.
+- Vertex auth error: run `gcloud auth application-default login` or set valid `GOOGLE_APPLICATION_CREDENTIALS`.
+- ADK port busy: `start_adk.sh` auto-increments from 8000.
+- Empty live feed: run `./refresh_live_data.sh 40`, then rerun agent.

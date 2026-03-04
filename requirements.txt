@@ -1,4 +1,7 @@
 google-adk
 python-dotenv
-pandas
-feedparser
+httpx>=0.25.0
+pydantic>=2.5.0
+google-generativeai>=0.8.0
+aiohttp>=3.9.0
+numpy>=1.26.0

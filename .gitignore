@@ -1,15 +1,24 @@
-# secrets
-.env
-
-# virtual env
-.venv/
-venv/
-
-# python cache
-__pycache__/
-*.pyc
 .DS_Store
-# ADK runtime
-agent/.adk/
+__pycache__/
+.venv/
 .adk/
-*.db
+adk_apps/.adk/
+*.pyc
+
+# Secrets and local environment
+.env
+*.env
+agent/.env
+*.pem
+*.p12
+*.key.json
+service-account*.json
+
+# Local outputs
+*.log
+tmp/
+agent/pipeline_cache.json
+agent/event_state.json
+agent/workflow_execution_log.json
+deliverables/dashboard_summary.json
+deliverables/dashboard_summary.html

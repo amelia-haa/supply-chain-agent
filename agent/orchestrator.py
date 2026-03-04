@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from agent.tools import (
+    build_cost_value_report,
+    derive_memory_feedback,
+    estimate_mitigation_success_score,
+    generate_actions,
+    get_company_profile,
+    log_mock_workflow_execution,
+    read_memory,
+    run_cost_optimized_pipeline,
+    score_risk,
+    simulate_tradeoffs,
+    write_memory,
+)
+
+
+@dataclass
+class CycleResult:
+    timestamp_utc: str
+    company: Dict[str, Any]
+    events: List[Dict[str, Any]]
+    memory_feedback: Dict[str, Any]
+    pipeline_stats: Dict[str, Any]
+    risk: Dict[str, Any]
+    plan: List[Dict[str, Any]]
+    actions: Dict[str, Any]
+    cost_value_report: Dict[str, Any]
+    workflow_execution_log: Dict[str, Any]
+    autonomous_decision: Dict[str, Any]
+    transparency_trace: Dict[str, Any]
+    memory_write: Dict[str, Any]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "timestamp_utc": self.timestamp_utc,
+            "company": self.company,
+            "events": self.events,
+            "memory_feedback": self.memory_feedback,
+            "pipeline_stats": self.pipeline_stats,
+            "risk": self.risk,
+            "plan": self.plan,
+            "actions": self.actions,
+            "cost_value_report": self.cost_value_report,
+            "workflow_execution_log": self.workflow_execution_log,
+            "autonomous_decision": self.autonomous_decision,
+            "transparency_trace": self.transparency_trace,
+            "memory_write": self.memory_write,
+        }
+
+
+class AutonomousSupplyChainOrchestrator:
+    """
+    End-to-end orchestrator for a single autonomous resilience cycle.
+    """
+
+    def run_cycle(
+        self,
+        company_profile: Optional[Dict[str, Any]] = None,
+        company_id: str = "de_semiconductor_auto",
+    ) -> CycleResult:
+        company = company_profile or get_company_profile(company_id=company_id)
+        memory_feedback = derive_memory_feedback(company.get("company_name", "unknown"))
+        optimized_pipeline = run_cost_optimized_pipeline(company)
+        events = optimized_pipeline["events_for_risk"]
+        pipeline_stats = optimized_pipeline["pipeline_stats"]
+        risk = score_risk(company, events, memory_feedback=memory_feedback)
+        plan = simulate_tradeoffs(company, risk)
+        actions = generate_actions(company, risk, plan)
+        cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
+        workflow_execution_log = log_mock_workflow_execution(company, risk, actions)
+        mitigation_success_score = estimate_mitigation_success_score(risk, actions, cost_value_report)
+        autonomous_decision = self._decide_autonomous_execution(risk, actions)
+        transparency_trace = self._build_transparency_trace(
+            company,
+            events,
+            pipeline_stats,
+            risk,
+            plan,
+            actions,
+            autonomous_decision,
+            cost_value_report,
+        )
+
+        memory_event = {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "company_id": company.get("company_id"),
+            "company_name": company.get("company_name"),
+            "top_event": events[0] if events else None,
+            "pipeline_stats": pipeline_stats,
+            "risk": risk,
+            "top_action": actions.get("recommended_top_action"),
+            "cost_value_report": cost_value_report,
+            "mitigation_success_score": mitigation_success_score,
+            "workflow_execution_log": workflow_execution_log,
+            "approval_required": actions.get("human_approval_required", False),
+            "autonomous_execution": autonomous_decision,
+        }
+        memory_write = write_memory(memory_event)
+
+        return CycleResult(
+            timestamp_utc=datetime.now(timezone.utc).isoformat(),
+            company=company,
+            events=events,
+            memory_feedback=memory_feedback,
+            pipeline_stats=pipeline_stats,
+            risk=risk,
+            plan=plan,
+            actions=actions,
+            cost_value_report=cost_value_report,
+            workflow_execution_log=workflow_execution_log,
+            autonomous_decision=autonomous_decision,
+            transparency_trace=transparency_trace,
+            memory_write=memory_write,
+        )
+
+    def memory(self) -> Dict[str, Any]:
+        return read_memory()
+
+    def _decide_autonomous_execution(self, risk: Dict[str, Any], actions: Dict[str, Any]) -> Dict[str, Any]:
+        risk_score = float(risk.get("risk_score", 0.0))
+        auto_candidate = bool(actions.get("auto_execution_candidate"))
+        if auto_candidate and risk_score >= 0.78:
+            return {
+                "mode": "auto_with_human_oversight",
+                "status": "triggered",
+                "reason": "Risk score exceeded autonomous threshold while human override remains enabled.",
+            }
+        return {
+            "mode": "human_review",
+            "status": "queued_for_approval",
+            "reason": "Risk below autonomous threshold or explicit approval required.",
+        }
+
+    def _build_transparency_trace(
+        self,
+        company: Dict[str, Any],
+        events: List[Dict[str, Any]],
+        pipeline_stats: Dict[str, Any],
+        risk: Dict[str, Any],
+        plan: List[Dict[str, Any]],
+        actions: Dict[str, Any],
+        autonomous_decision: Dict[str, Any],
+        cost_value_report: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return {
+            "stage_sequence": ["perception", "risk_intelligence", "planning", "action", "memory"],
+            "key_inputs": {
+                "company_id": company.get("company_id"),
+                "event_count": len(events),
+                "pipeline_stats": pipeline_stats,
+                "risk_components": risk.get("components", {}),
+            },
+            "decision_logic": {
+                "risk_level": risk.get("risk_level"),
+                "top_plan": plan[0]["action"] if plan else None,
+                "human_approval_required": actions.get("human_approval_required", False),
+                "autonomous_mode": autonomous_decision.get("mode"),
+                "tiered_alert_action": actions.get("tiered_alert_action"),
+                "guardrail_flags": actions.get("guardrail_flags", []),
+            },
+            "cost_value_summary": cost_value_report,
+            "responsible_ai_controls": {
+                "human_in_the_loop": True,
+                "override_threshold": "risk_score >= 0.78 triggers autonomous workflow with approval gate",
+                "bias_check_status": "placeholder_demo_ready",
+            },
+        }
