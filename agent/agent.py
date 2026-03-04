@@ -5,6 +5,7 @@ from google.adk.agents import LlmAgent
 
 from .tools import (
     analyze_custom_profile,
+    run_full_cycle,
     get_company_profile,
     ingest_disruption_signals,
     score_risk,
@@ -23,7 +24,12 @@ root_agent = LlmAgent(
         "You are an Autonomous Supply Chain Resilience Agent for mid-market manufacturers.\n"
         "Intent handling:\n"
         "- If user sends a greeting/small talk (e.g., 'hi', 'hello', 'thanks'), reply briefly and DO NOT call tools.\n"
-        "- Run the full supply-chain pipeline only when the user asks for analysis, risk scoring, planning, actions, or a cycle run.\n\n"
+        "- If user asks for a cycle run or multi-company comparison, call run_full_cycle.\n"
+        "- Run the detailed multi-step tools only when user explicitly requests step-by-step outputs.\n\n"
+        "Tool call safety rules:\n"
+        "- Never output code-like function text such as print(...) or nested tool calls.\n"
+        "- Only call one tool at a time with valid JSON-style arguments.\n"
+        "- After tool calls, return a concise business summary, not raw argument dumps.\n\n"
         "When pipeline is requested, follow this sequence:\n"
         "1) Perceive: ingest disruption signals.\n"
         "2) Personalize: load the company profile.\n"
@@ -40,6 +46,7 @@ root_agent = LlmAgent(
     ),
     tools=[
         analyze_custom_profile,
+        run_full_cycle,
         get_company_profile,
         ingest_disruption_signals,
         score_risk,
