@@ -1593,9 +1593,14 @@ def run_full_cycle(
     Use comma-separated company IDs for multi-company comparison.
     Returns a concise summary by default; set include_full_output=True to include full payloads.
     """
+    demo_mode = str(os.getenv("APP_DEMO_MODE", "false")).strip().lower() in {"1", "true", "yes"}
     ids = [s.strip() for s in str(company_ids).split(",") if s.strip()]
     if not ids:
         ids = ["de_semiconductor_auto"]
+    if demo_mode:
+        # Keep demo calls cheap and predictable.
+        ids = ids[:2]
+        include_full_output = False
 
     runs: List[Dict[str, Any]] = []
     summaries: List[Dict[str, Any]] = []
@@ -1611,6 +1616,7 @@ def run_full_cycle(
                 "risk_score": full_result["risk"].get("risk_score"),
                 "top_3_actions": [p.get("action") for p in full_result.get("plan", [])[:3]],
                 "tiered_alert_action": full_result["actions"].get("tiered_alert_action"),
+                "execution_mode": full_result["actions"].get("execution_mode"),
                 "human_approval_required": full_result["actions"].get("human_approval_required"),
                 "estimated_revenue_at_risk_usd": full_result["cost_value_report"].get("estimated_revenue_at_risk_usd"),
                 "estimated_roi_multiple": full_result["cost_value_report"].get("estimated_roi_multiple"),
@@ -1623,6 +1629,7 @@ def run_full_cycle(
         "run_count": len(runs),
         "companies_processed": [s["company_id"] for s in summaries],
         "summary": summaries,
+        "demo_mode": demo_mode,
     }
     if include_full_output:
         payload["runs"] = runs

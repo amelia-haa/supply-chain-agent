@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -23,6 +24,22 @@ class RunCycleRequest(BaseModel):
     max_items: int = 40
     force_run: bool = False
     include_full_output: bool = False
+
+
+def _extract_retry_after_seconds(error_text: str) -> int:
+    text = str(error_text or "")
+    patterns = [
+        r"retry in ([0-9]+(?:\.[0-9]+)?)s",
+        r"retryDelay['\"]?:\s*'([0-9]+)s'",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if m:
+            try:
+                return max(1, int(float(m.group(1))))
+            except ValueError:
+                continue
+    return 60
 
 
 def _check_new_signals(company_ids: List[str]) -> Dict[str, Any]:
@@ -82,10 +99,30 @@ def run_cycle(req: RunCycleRequest) -> Dict[str, Any]:
         }
 
     # 3) Only now run full cycle.
-    result = run_full_cycle(
-        company_ids=",".join(req.company_ids),
-        include_full_output=req.include_full_output,
-    )
+    try:
+        result = run_full_cycle(
+            company_ids=",".join(req.company_ids),
+            include_full_output=req.include_full_output,
+        )
+    except Exception as exc:
+        err = str(exc)
+        resource_exhausted = ("429" in err) or ("RESOURCE_EXHAUSTED" in err)
+        if resource_exhausted:
+            retry_after = _extract_retry_after_seconds(err)
+            return {
+                "status": "deferred_quota",
+                "started_utc": started,
+                "finished_utc": datetime.now(timezone.utc).isoformat(),
+                "ingest_meta": ingest_meta,
+                "gate": gate,
+                "retry_after_seconds": retry_after,
+                "message": (
+                    "LLM quota was temporarily exhausted. Please retry after the suggested delay. "
+                    "Deterministic pre-filtering is still active."
+                ),
+                "error": err[:500],
+            }
+        raise
     return {
         "status": "processed",
         "started_utc": started,
