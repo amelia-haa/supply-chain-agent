@@ -956,6 +956,113 @@ def build_cost_value_report(
     }
 
 
+def apply_proactive_triggers(
+    company: Dict[str, Any],
+    events: List[Dict[str, Any]],
+    risk: Dict[str, Any],
+    cost_value_report: Dict[str, Any],
+    actions: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Event-driven trigger policy for proactive autonomy.
+    Triggers:
+    - severity >= 0.8 (4/5 scale)
+    - revenue_at_risk >= configured threshold
+    - inventory buffer coverage < projected delay
+    - supplier health drop >= configured threshold
+    """
+    out = dict(actions)
+    max_severity = max([float(e.get("severity", 0.0)) for e in events] or [0.0])
+    severity_trigger = max_severity >= 0.8
+
+    revenue_at_risk = float(cost_value_report.get("estimated_revenue_at_risk_usd", 0.0))
+    rev_threshold = float(os.getenv("APP_TRIGGER_REVENUE_AT_RISK_USD", "500000"))
+    revenue_trigger = revenue_at_risk >= rev_threshold
+
+    inv_policy = company.get("inventory_policy", {}) or {}
+    buffer_vals = [float(v) for k, v in inv_policy.items() if str(k).endswith("_days_buffer")]
+    current_buffer_days = min(buffer_vals) if buffer_vals else 10.0
+    projected_delay_days = 8 if risk.get("risk_level") == "critical" else 5 if risk.get("risk_level") == "high" else 3
+    buffer_trigger = current_buffer_days < projected_delay_days
+
+    semicon_share = float(
+        (company.get("supplier_concentration", {}) or {})
+        .get("semiconductors", {})
+        .get("top_supplier_share", 0.6)
+    )
+    current_health = max(0.0, min(1.0, 1.0 - (0.6 * semicon_share + 0.4 * float(risk.get("risk_score", 0.0)))))
+    mem = _load_memory()
+    prior_health = None
+    for ev in reversed(mem.get("events", [])):
+        if ev.get("company_id") == company.get("company_id") and ev.get("supplier_health_score_current") is not None:
+            prior_health = float(ev.get("supplier_health_score_current"))
+            break
+    if prior_health is None:
+        prior_health = min(1.0, current_health + 0.05)
+    health_drop = max(0.0, prior_health - current_health)
+    health_drop_threshold = float(os.getenv("APP_TRIGGER_SUPPLIER_HEALTH_DROP", "0.15"))
+    supplier_health_trigger = health_drop >= health_drop_threshold
+
+    triggered = {
+        "severity_gte_4_of_5": severity_trigger,
+        "revenue_at_risk_gte_threshold": revenue_trigger,
+        "buffer_coverage_lt_delay": buffer_trigger,
+        "supplier_health_drop": supplier_health_trigger,
+    }
+    fired = [k for k, v in triggered.items() if v]
+    out["proactive_triggers"] = {
+        "thresholds": {
+            "severity_gte": 0.8,
+            "revenue_at_risk_usd_gte": rev_threshold,
+            "supplier_health_drop_gte": health_drop_threshold,
+        },
+        "values": {
+            "max_severity": round(max_severity, 3),
+            "revenue_at_risk_usd": round(revenue_at_risk, 2),
+            "inventory_buffer_days": round(current_buffer_days, 2),
+            "projected_delay_days": projected_delay_days,
+            "supplier_health_prev": round(prior_health, 3),
+            "supplier_health_current": round(current_health, 3),
+            "supplier_health_drop": round(health_drop, 3),
+        },
+        "triggered": triggered,
+        "fired": fired,
+    }
+    out["proactive_trigger"] = len(fired) > 0
+    out["supplier_health_score_current"] = round(current_health, 3)
+    out["supplier_health_score_previous"] = round(prior_health, 3)
+
+    # Auto-mitigation responses when explicit trigger conditions fire.
+    if buffer_trigger:
+        flags = list(out.get("erp_reorder_adjustment_flags", []))
+        if flags:
+            flags[0]["recommended_reorder_increase_pct"] = max(int(flags[0].get("recommended_reorder_increase_pct", 10)), 20)
+            flags[0]["reason"] = "Inventory buffer is below projected disruption delay."
+        out["erp_reorder_adjustment_flags"] = flags
+        rec = dict(out.get("preemptive_stock_build_recommendation", {}))
+        rec["target_buffer_days"] = max(int(rec.get("target_buffer_days", 14)), projected_delay_days + 7)
+        rec["status"] = "triggered"
+        out["preemptive_stock_build_recommendation"] = rec
+
+    severe_escalation = severity_trigger or revenue_trigger
+    if severe_escalation:
+        out["tiered_alert_action"] = "executive_escalation"
+        out["human_approval_required"] = True
+        out["auto_execution_candidate"] = bool(out.get("execution_mode") == "auto_execute")
+        if not out.get("draft_executive_alert"):
+            out["draft_executive_alert"] = (
+                f"EXEC ALERT: {company.get('company_name')} proactive trigger fired. "
+                f"severity={max_severity:.2f}, revenue_at_risk=${revenue_at_risk:,.0f}."
+            )
+        workflows = list(out.get("triggered_workflows", []))
+        for wf in workflows:
+            if wf.get("workflow") in {"supplier_negotiation", "erp_reorder_review"}:
+                wf["status"] = "awaiting_approval" if out.get("execution_mode") != "auto_execute" else "triggered"
+        out["triggered_workflows"] = workflows
+
+    return out
+
+
 def build_business_impact_report(
     company: Dict[str, Any],
     risk: Dict[str, Any],
@@ -1238,8 +1345,9 @@ def _run_cycle_internal(company_id: str) -> Dict[str, Any]:
     risk = score_risk(company, events, memory_feedback=memory_feedback)
     plan = simulate_tradeoffs(company, risk)
     actions = generate_actions(company, risk, plan)
-    responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
     cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
+    actions = apply_proactive_triggers(company, events, risk, cost_value_report, actions)
+    responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
     business_impact_report = build_business_impact_report(company, risk, plan, actions, cost_value_report)
     uncertainty_bands = build_uncertainty_bands(risk, cost_value_report)
     portfolio_optimization = optimize_supplier_portfolio(company)
@@ -1259,6 +1367,7 @@ def _run_cycle_internal(company_id: str) -> Dict[str, Any]:
         "business_impact_report": business_impact_report,
         "responsible_ai_report": responsible_ai_report,
         "mitigation_success_score": mitigation_success_score,
+        "supplier_health_score_current": actions.get("supplier_health_score_current"),
         "workflow_execution_log": workflow_execution_log,
         "approval_required": actions.get("human_approval_required", False),
     }
@@ -1533,8 +1642,9 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
     risk = score_risk(company, events, memory_feedback=memory_feedback)
     plan = simulate_tradeoffs(company, risk)
     actions = generate_actions(company, risk, plan)
-    responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
     cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
+    actions = apply_proactive_triggers(company, events, risk, cost_value_report, actions)
+    responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
     business_impact_report = build_business_impact_report(company, risk, plan, actions, cost_value_report)
     uncertainty_bands = build_uncertainty_bands(risk, cost_value_report)
     portfolio_optimization = optimize_supplier_portfolio(company)
@@ -1556,6 +1666,7 @@ def analyze_custom_profile(profile: Any) -> Dict[str, Any]:
             "business_impact_report": business_impact_report,
             "responsible_ai_report": responsible_ai_report,
             "mitigation_success_score": mitigation_success_score,
+            "supplier_health_score_current": actions.get("supplier_health_score_current"),
             "workflow_execution_log": workflow_execution_log,
             "approval_required": actions.get("human_approval_required", False),
         }

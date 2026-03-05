@@ -8,6 +8,7 @@ from agent.tools import (
     build_business_impact_report,
     build_judging_scorecard,
     build_uncertainty_bands,
+    apply_proactive_triggers,
     build_executive_summary,
     detect_signal_drift,
     generate_playbook_autopilot,
@@ -95,8 +96,9 @@ class AutonomousSupplyChainOrchestrator:
         risk = score_risk(company, events, memory_feedback=memory_feedback)
         plan = simulate_tradeoffs(company, risk)
         actions = generate_actions(company, risk, plan)
-        responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
         cost_value_report = build_cost_value_report(risk, pipeline_stats, company)
+        actions = apply_proactive_triggers(company, events, risk, cost_value_report, actions)
+        responsible_ai_report = build_responsible_ai_report(company, risk, plan, events, actions)
         business_impact_report = build_business_impact_report(company, risk, plan, actions, cost_value_report)
         uncertainty_bands = build_uncertainty_bands(risk, cost_value_report)
         portfolio_optimization = optimize_supplier_portfolio(company)
@@ -129,6 +131,7 @@ class AutonomousSupplyChainOrchestrator:
             "business_impact_report": business_impact_report,
             "responsible_ai_report": responsible_ai_report,
             "mitigation_success_score": mitigation_success_score,
+            "supplier_health_score_current": actions.get("supplier_health_score_current"),
             "workflow_execution_log": workflow_execution_log,
             "approval_required": actions.get("human_approval_required", False),
             "autonomous_execution": autonomous_decision,
