@@ -20,5 +20,4 @@ tmp/
 agent/pipeline_cache.json
 agent/event_state.json
 agent/workflow_execution_log.json
-deliverables/dashboard_summary.json
-deliverables/dashboard_summary.html
+

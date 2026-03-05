@@ -144,9 +144,6 @@ python3 generate_dashboard.py
 
 Outputs:
 
-- `deliverables/dashboard_summary.json`
-- `deliverables/dashboard_summary.html`
-
 ## 9) What this prototype demonstrates
 
 - Real-time-ready disruption monitoring flow (mock/live/hybrid input)

@@ -11,12 +11,6 @@ from .tools import (
     run_evaluation_harness,
     simulate_what_if_scenarios,
     generate_roi_benchmark_report,
-    get_company_profile,
-    ingest_disruption_signals,
-    score_risk,
-    simulate_tradeoffs,
-    generate_actions,
-    write_memory,
     read_memory,
 )
 
@@ -35,18 +29,12 @@ root_agent = LlmAgent(
         "- If user asks to onboard a new company profile, call onboard_company_profile.\n"
         "- If user asks for ROI benchmark comparison, call generate_roi_benchmark_report.\n"
         "- If user asks for systematic model evaluation, call run_evaluation_harness.\n"
-        "- Run the detailed multi-step tools only when user explicitly requests step-by-step outputs.\n\n"
+        "- Use read_memory only when user asks for memory/history.\n\n"
         "Tool call safety rules:\n"
         "- Never output code-like function text such as print(...) or nested tool calls.\n"
         "- Only call one tool at a time with valid JSON-style arguments.\n"
         "- After tool calls, return a concise business summary, not raw argument dumps.\n\n"
-        "When pipeline is requested, follow this sequence:\n"
-        "1) Perceive: ingest disruption signals.\n"
-        "2) Personalize: load the company profile.\n"
-        "3) Reason: compute risk score and explain the reasons.\n"
-        "4) Plan: simulate trade-offs and rank mitigation options.\n"
-        "5) Act: draft operational actions (emails/alerts/reorder suggestions).\n"
-        "6) Memory: save the event, decision, and rationale.\n\n"
+        "When pipeline is requested, call run_full_cycle and summarize the returned outputs clearly.\n\n"
         "If user provides a custom company profile JSON, use analyze_custom_profile.\n\n"
         "Rules:\n"
         "- Be proactive: if risk >= 0.8, recommend escalation.\n"
@@ -62,12 +50,6 @@ root_agent = LlmAgent(
         run_evaluation_harness,
         simulate_what_if_scenarios,
         generate_roi_benchmark_report,
-        get_company_profile,
-        ingest_disruption_signals,
-        score_risk,
-        simulate_tradeoffs,
-        generate_actions,
-        write_memory,
         read_memory,
     ],
 )
