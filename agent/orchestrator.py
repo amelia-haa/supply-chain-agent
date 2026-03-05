@@ -187,17 +187,17 @@ class AutonomousSupplyChainOrchestrator:
 
     def _decide_autonomous_execution(self, risk: Dict[str, Any], actions: Dict[str, Any]) -> Dict[str, Any]:
         risk_score = float(risk.get("risk_score", 0.0))
-        auto_candidate = bool(actions.get("auto_execution_candidate"))
-        if auto_candidate and risk_score >= 0.78:
+        execution_mode = str(actions.get("execution_mode", "dry_run"))
+        if execution_mode == "auto_execute" and risk_score >= 0.78:
             return {
                 "mode": "auto_with_human_oversight",
                 "status": "triggered",
-                "reason": "Risk score exceeded autonomous threshold while human override remains enabled.",
+                "reason": "Risk score exceeded autonomous threshold and policy enabled auto execution.",
             }
         return {
             "mode": "human_review",
             "status": "queued_for_approval",
-            "reason": "Risk below autonomous threshold or explicit approval required.",
+            "reason": "Policy requires review/dry-run for this risk level.",
         }
 
     def _build_transparency_trace(
@@ -222,8 +222,12 @@ class AutonomousSupplyChainOrchestrator:
             },
             "decision_logic": {
                 "risk_level": risk.get("risk_level"),
+                "risk_score": risk.get("risk_score"),
+                "early_warning_detected": risk.get("early_warning_detected", False),
                 "top_plan": plan[0]["action"] if plan else None,
                 "human_approval_required": actions.get("human_approval_required", False),
+                "execution_mode": actions.get("execution_mode"),
+                "autonomy_policy": actions.get("autonomy_policy"),
                 "autonomous_mode": autonomous_decision.get("mode"),
                 "tiered_alert_action": actions.get("tiered_alert_action"),
                 "guardrail_flags": actions.get("guardrail_flags", []),

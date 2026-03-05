@@ -73,6 +73,110 @@ def _save_memory(mem: Dict[str, Any]) -> None:
     _save_json(MEMORY_PATH, mem)
 
 
+def _parse_iso_utc(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        text = str(value).replace("Z", "+00:00")
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _resolve_execution_policy(company: Dict[str, Any], risk: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Runtime autonomy policy:
+    - assistive: always draft-only
+    - human_approve (default): high/critical requires approval
+    - auto_execute: auto for severe events when risk appetite permits
+    """
+    policy = str(os.getenv("APP_AUTONOMY_MODE", "human_approve")).strip().lower()
+    if policy not in {"assistive", "human_approve", "auto_execute"}:
+        policy = "human_approve"
+
+    risk_level = str(risk.get("risk_level", "low"))
+    risk_score = float(risk.get("risk_score", 0.0))
+    risk_appetite = str(company.get("risk_appetite", "medium")).lower()
+
+    if policy == "assistive":
+        return {
+            "policy": policy,
+            "execution_mode": "dry_run",
+            "human_approval_required": True,
+            "auto_execute": False,
+            "reason": "Assistive mode keeps actions in draft state.",
+        }
+
+    if policy == "auto_execute":
+        auto_ok = risk_level in {"high", "critical"} and risk_score >= 0.78 and risk_appetite != "low"
+        return {
+            "policy": policy,
+            "execution_mode": "auto_execute" if auto_ok else "human_approve",
+            "human_approval_required": not auto_ok,
+            "auto_execute": auto_ok,
+            "reason": (
+                "Risk crossed auto threshold and risk appetite allows autonomous execution."
+                if auto_ok
+                else "Auto-execution blocked by threshold or conservative risk appetite."
+            ),
+        }
+
+    # Default human_approve policy.
+    needs_approval = risk_level in {"high", "critical"}
+    return {
+        "policy": policy,
+        "execution_mode": "human_approve" if needs_approval else "dry_run",
+        "human_approval_required": needs_approval,
+        "auto_execute": False,
+        "reason": "Human approval is required for elevated risk events.",
+    }
+
+
+def _compute_escalation_clock(company_id: str, current_risk_level: str) -> Dict[str, Any]:
+    """
+    Tracks how long a high/critical incident remains open.
+    Incident is considered closed once a low/medium event is logged after the last high/critical record.
+    """
+    mem = _load_memory()
+    events = [e for e in mem.get("events", []) if e.get("company_id") == company_id]
+    high_events = []
+    recovery_events = []
+    for e in events:
+        level = str((e.get("risk") or {}).get("risk_level", "")).lower()
+        ts = _parse_iso_utc(e.get("timestamp_utc"))
+        if not ts:
+            continue
+        if level in {"high", "critical"}:
+            high_events.append(ts)
+        elif level in {"low", "medium"}:
+            recovery_events.append(ts)
+
+    if current_risk_level not in {"high", "critical"}:
+        return {
+            "open_incident": False,
+            "hours_open": 0.0,
+            "sla_hours": 0,
+            "sla_breached": False,
+            "started_utc": None,
+        }
+
+    now = datetime.now(timezone.utc)
+    latest_high = max(high_events) if high_events else now
+    recovered_after = any(t > latest_high for t in recovery_events)
+    open_incident = not recovered_after
+    hours_open = max(0.0, (now - latest_high).total_seconds() / 3600.0) if open_incident else 0.0
+    sla_hours = int(os.getenv("APP_ESCALATION_SLA_HOURS", "6"))
+    if current_risk_level == "high":
+        sla_hours = max(sla_hours, 8)
+    return {
+        "open_incident": open_incident,
+        "hours_open": round(hours_open, 2),
+        "sla_hours": sla_hours,
+        "sla_breached": bool(open_incident and hours_open >= sla_hours),
+        "started_utc": latest_high.isoformat(),
+    }
+
+
 def _load_company_profiles() -> Dict[str, Dict[str, Any]]:
     if not os.path.exists(PROFILES_PATH):
         return {
@@ -488,8 +592,22 @@ def score_risk(
     logistics_risk = 0.0
     inventory_risk = 0.0
 
+    early_warning_signals: List[Dict[str, Any]] = []
     for e in events:
         event_risk = e["severity"] * e["confidence"] * e.get("company_relevance", 1.0)
+        sev = float(e.get("severity", 0.0))
+        conf = float(e.get("confidence", 0.0))
+        if sev >= 0.55 and conf >= 0.55:
+            early_warning_signals.append(
+                {
+                    "id": e.get("id"),
+                    "type": e.get("type"),
+                    "region": e.get("region"),
+                    "severity": round(sev, 3),
+                    "confidence": round(conf, 3),
+                    "summary": _normalize_summary(str(e.get("summary", "")), max_words=18),
+                }
+            )
         if e.get("category") == "procurement":
             procurement_risk = max(procurement_risk, event_risk)
         elif e.get("category") == "logistics":
@@ -523,6 +641,9 @@ def score_risk(
         risk += float(memory_feedback.get("risk_bias", 0.0))
         if memory_feedback.get("risk_bias", 0.0) > 0:
             reasons.append("Historical disruptions indicate persistent fragility; upward risk bias applied.")
+    if len(early_warning_signals) >= 2 and risk < 0.5:
+        reasons.append("Multiple early-warning signals detected; pre-emptive mitigation is recommended.")
+        risk = min(1.0, risk + 0.03)
 
     risk = max(0.0, min(1.0, risk))
     level = "low" if risk < 0.5 else "high" if risk < 0.8 else "critical"
@@ -531,6 +652,8 @@ def score_risk(
     return {
         "risk_score": risk,
         "risk_level": level,
+        "early_warning_detected": len(early_warning_signals) > 0,
+        "early_warning_signals": early_warning_signals[:3],
         "components": {
             "procurement_risk": round(max(0.0, min(1.0, procurement_risk)), 3),
             "logistics_risk": round(max(0.0, min(1.0, logistics_risk)), 3),
@@ -588,9 +711,11 @@ def generate_actions(company: Dict[str, Any], risk: Dict[str, Any], plan: List[D
         plan = [{"action": "Monitor only", "cost_usd": 0, "service_gain": 0.0, "resilience_gain": 0.0, "score": 0.0}]
     top = dict(plan[0])
     escalation = risk["risk_level"] in {"high", "critical"}
-    auto_mitigation = risk["risk_score"] >= 0.78
     primary_component = (company.get("critical_components") or ["critical_component"])[0]
     backup = dict(plan[1]) if len(plan) > 1 else None
+    policy = _resolve_execution_policy(company, risk)
+    execution_mode = policy["execution_mode"]
+    auto_mitigation = bool(policy["auto_execute"])
 
     # Responsible-AI guardrails: constrain budget-intensive recommendations unless risk is critical.
     max_noncritical_cost = 200000
@@ -629,6 +754,7 @@ Estimated cost: ${top['cost_usd']:,}
         "high": "ai_mitigation_planning",
         "critical": "executive_escalation",
     }.get(risk["risk_level"], "dashboard_alert")
+    workflow_status = "triggered" if execution_mode == "auto_execute" else "awaiting_approval" if execution_mode == "human_approve" else "drafted"
 
     return {
         "recommended_top_action": top,
@@ -648,13 +774,17 @@ Estimated cost: ${top['cost_usd']:,}
             "status": "recommended",
         },
         "triggered_workflows": [
-            {"workflow": "supplier_negotiation", "status": "triggered" if auto_mitigation else "drafted"},
-            {"workflow": "erp_reorder_review", "status": "triggered" if auto_mitigation else "drafted"},
+            {"workflow": "supplier_negotiation", "status": workflow_status},
+            {"workflow": "erp_reorder_review", "status": workflow_status},
         ],
         "tiered_alert_action": tier_action,
         "guardrail_flags": guardrail_flags,
-        "human_approval_required": escalation,
+        "human_approval_required": bool(policy["human_approval_required"]),
         "auto_execution_candidate": auto_mitigation,
+        "execution_mode": execution_mode,
+        "autonomy_policy": policy["policy"],
+        "autonomy_reason": policy["reason"],
+        "proactive_trigger": bool(risk.get("early_warning_detected") or risk.get("risk_level") in {"high", "critical"}),
     }
 
 
@@ -1010,7 +1140,10 @@ def generate_playbook_autopilot(
 
 
 def detect_signal_drift(events: List[Dict[str, Any]]) -> Dict[str, Any]:
-    prev = _load_json(DRIFT_STATE_PATH, {"type_counts": {}, "region_counts": {}, "last_updated_utc": None})
+    prev = _load_json(
+        DRIFT_STATE_PATH,
+        {"type_counts": {}, "region_counts": {}, "recent_totals": [], "recent_severity": [], "last_updated_utc": None},
+    )
     prev_types = prev.get("type_counts", {})
     prev_regions = prev.get("region_counts", {})
     type_counts: Dict[str, int] = {}
@@ -1033,17 +1166,50 @@ def detect_signal_drift(events: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     type_delta = _delta(type_counts, prev_types)
     region_delta = _delta(region_counts, prev_regions)
-    status = "shift_detected" if type_delta or region_delta else "stable"
+    recent_totals = list(prev.get("recent_totals", []))[-5:]
+    recent_severity = list(prev.get("recent_severity", []))[-5:]
+    current_total = len(events)
+    current_avg_severity = round(
+        sum(float(e.get("severity", 0.0)) for e in events) / max(1, current_total),
+        4,
+    )
+    prev_total_avg = (sum(recent_totals) / len(recent_totals)) if recent_totals else float(current_total)
+    prev_sev_avg = (sum(recent_severity) / len(recent_severity)) if recent_severity else current_avg_severity
+    total_surge = current_total >= max(3, int(prev_total_avg * 1.4)) if prev_total_avg > 0 else current_total >= 3
+    severity_jump = (current_avg_severity - prev_sev_avg) >= 0.08
+    early_warning_detected = bool(total_surge or severity_jump)
+    status = "early_warning" if early_warning_detected else "shift_detected" if type_delta or region_delta else "stable"
+    early_warning_signals: List[str] = []
+    if total_surge:
+        early_warning_signals.append("signal_volume_surge")
+    if severity_jump:
+        early_warning_signals.append("severity_trend_up")
+    recent_totals.append(current_total)
+    recent_severity.append(current_avg_severity)
 
     _save_json(
         DRIFT_STATE_PATH,
         {
             "type_counts": type_counts,
             "region_counts": region_counts,
+            "recent_totals": recent_totals[-6:],
+            "recent_severity": recent_severity[-6:],
             "last_updated_utc": datetime.now(timezone.utc).isoformat(),
         },
     )
-    return {"status": status, "type_changes": type_delta[:8], "region_changes": region_delta[:8]}
+    return {
+        "status": status,
+        "type_changes": type_delta[:8],
+        "region_changes": region_delta[:8],
+        "early_warning_detected": early_warning_detected,
+        "early_warning_signals": early_warning_signals,
+        "trend_metrics": {
+            "current_total_signals": current_total,
+            "rolling_avg_total_signals": round(prev_total_avg, 2),
+            "current_avg_severity": current_avg_severity,
+            "rolling_avg_severity": round(prev_sev_avg, 4),
+        },
+    }
 
 
 def build_executive_summary(run_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1257,6 +1423,7 @@ def log_mock_workflow_execution(
         "company_id": company.get("company_id"),
         "company_name": company.get("company_name"),
         "risk_level": risk.get("risk_level"),
+        "execution_mode": actions.get("execution_mode", "dry_run"),
         "tiered_alert_action": actions.get("tiered_alert_action"),
         "workflows": actions.get("triggered_workflows", []),
         "mock_provider_results": [
@@ -1264,6 +1431,20 @@ def log_mock_workflow_execution(
             {"provider": "slack", "status": "success", "code": 200},
         ],
     }
+    escalation_clock = _compute_escalation_clock(
+        str(company.get("company_id", "")),
+        str(risk.get("risk_level", "low")),
+    )
+    auto_escalated = bool(
+        escalation_clock.get("sla_breached")
+        and actions.get("tiered_alert_action") != "executive_escalation"
+    )
+    if auto_escalated:
+        record["tiered_alert_action"] = "executive_escalation_auto"
+        record["auto_escalation_reason"] = (
+            f"SLA breach after {escalation_clock.get('hours_open')}h "
+            f"(threshold {escalation_clock.get('sla_hours')}h)."
+        )
 
     integration_results: List[Dict[str, Any]] = []
     webhook_url = os.getenv("WORKFLOW_WEBHOOK_URL", "").strip()
@@ -1274,6 +1455,8 @@ def log_mock_workflow_execution(
         "company_name": company.get("company_name"),
         "risk_level": risk.get("risk_level"),
         "actions": actions.get("triggered_workflows", []),
+        "execution_mode": actions.get("execution_mode", "dry_run"),
+        "escalation_clock": escalation_clock,
         "timestamp_utc": record["timestamp_utc"],
     }
     if webhook_url:
@@ -1305,6 +1488,8 @@ def log_mock_workflow_execution(
         ]
 
     record["integration_results"] = integration_results
+    record["escalation_clock"] = escalation_clock
+    record["auto_escalated"] = auto_escalated
     _append_workflow_log(record)
     successful = sum(1 for r in integration_results if r.get("ok") is True)
     failed = sum(1 for r in integration_results if r.get("ok") is False)
@@ -1314,6 +1499,8 @@ def log_mock_workflow_execution(
         "delivered": successful,
         "failed": failed,
         "path": WORKFLOW_LOG_PATH,
+        "escalation_clock": escalation_clock,
+        "auto_escalated": auto_escalated,
         "integration_results": integration_results,
     }
 
